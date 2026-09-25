@@ -9,14 +9,11 @@
    ============================================================ */
 
 #fin-pet-root{
+  --fin-avatar-size:58px;
   position:fixed;
   right:18px;
   bottom:22px;
   z-index:1200;
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:10px;
   font-family:var(--font-b);
   pointer-events:none; /* re-enabled on interactive children */
 }
@@ -26,6 +23,20 @@
 /* ---------- speech bubble ---------- */
 .fin-bubble{
   pointer-events:auto;
+  position:absolute;
+  right:0;
+  bottom:calc(var(--fin-avatar-size) + 10px);
+  width:max-content;
+  /* #fin-pet-root has no declared width either (it auto-sizes to the
+     58px avatar, its only in-flow child). With only "right" set and
+     width left as its default "auto", an absolutely-positioned box's
+     shrink-to-fit sizing is capped by the containing block's available
+     width — i.e. it would get squeezed down to ~58px before max-width
+     ever gets a say, which is the cramped one-word-per-line look.
+     Setting an explicit width:max-content skips that containing-block
+     sizing step altogether, so the bubble sizes itself from its own
+     text (still capped by max-width below) regardless of how narrow
+     its invisible parent is. */
   max-width:250px;
   background:var(--surface);
   border:1px solid var(--border2);
@@ -39,7 +50,6 @@
   transform:translateY(8px) scale(.96);
   transform-origin:bottom right;
   transition:opacity .22s ease, transform .22s ease;
-  position:relative;
 }
 .fin-bubble.fin-show{opacity:1;transform:translateY(0) scale(1);}
 .fin-bubble-close{
@@ -276,11 +286,13 @@
     right:12px;
     bottom:calc(72px + max(8px, env(safe-area-inset-bottom)));
   }
+  #fin-pet-root{--fin-avatar-size:48px;}
   .fin-avatar-wrap{width:48px;height:48px;}
   .fin-bubble{max-width:min(72vw,230px);font-size:12px;}
 }
 @media(max-width:380px){
   .fin-bubble{max-width:64vw;padding:10px 12px;}
+  #fin-pet-root{--fin-avatar-size:44px;}
   .fin-avatar-wrap{width:44px;height:44px;}
 }
 
