@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#060608">
+<title>FINUITY Admin</title>
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --bg:#060608; --surface:#0f0f12; --surface2:#16161a; --surface3:#1c1c21;
+    --border:#1f1f26; --border2:#2a2a33;
+    --text:#f0f0f5; --muted:#8b8b99;
+    --accent:#a8e038; --accent-dim:#85b82c; --accent-bg:rgba(168,224,56,.09);
+    --red:#f04848; --red-bg:rgba(240,72,72,.10);
+    --amber:#e8a020; --blue:#5a9cf5;
+    --r:14px; --r-sm:9px;
+    --font-d:'Sora',system-ui,sans-serif; --font-b:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-b);font-size:14px;line-height:1.5;min-height:100vh;font-variant-numeric:tabular-nums}
+  button,input,select,textarea{font-family:inherit}
+  h1,h2{font-family:var(--font-d);letter-spacing:-.02em;margin:0}
+
+  /* ---------- Buttons / inputs ---------- */
+  .btn{background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:9px 15px;border-radius:var(--r-sm);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s}
+  .btn:hover{border-color:#43434f}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#0a0d04;font-weight:600}
+  .btn.primary:hover{background:var(--accent-dim);border-color:var(--accent-dim)}
+  .btn.danger{color:var(--red);border-color:rgba(240,72,72,.3);background:transparent}
+  .btn.danger:hover{background:var(--red-bg);border-color:rgba(240,72,72,.55)}
+  .btn.sm{padding:5px 10px;font-size:12px}
+  .btn.block{width:100%;padding:12px;font-size:14px}
+  .btn:focus-visible,.inp:focus-visible,.tab:focus-visible,.icon-btn:focus-visible,.eye:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .icon-btn{background:none;border:1px solid transparent;color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:15px;flex:none}
+  .icon-btn:hover{background:var(--surface2);color:var(--text)}
+  .inp{width:100%;padding:10px 12px;font-size:13.5px;border-radius:var(--r-sm);background:var(--surface2);border:1px solid var(--border2);color:var(--text);outline:none;transition:border-color .15s}
+  .inp:focus{border-color:var(--accent)}
+  .inp::placeholder{color:#5c5c6a}
+  select.inp{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b8b99' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+  textarea.inp{resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.55}
+  .lbl{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:10px 0}
+  .check input{accent-color:var(--accent);width:16px;height:16px;margin:0}
+
+  /* ---------- Login ---------- */
+  #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .login-card{width:100%;max-width:380px;text-align:center}
+  .login-logo{position:relative;width:112px;height:112px;margin:0 auto 18px}
+  .login-logo::before{content:'';position:absolute;inset:-34%;background:radial-gradient(circle,rgba(168,224,56,.2),transparent 62%);pointer-events:none}
+  .login-logo img{position:relative;width:100%;height:100%;object-fit:contain}
+  .login-card h1{font-size:26px}
+  .login-card .sub{color:var(--muted);margin:6px 0 28px;font-size:14px}
+  .login-card form{text-align:left}
+  .login-card .fld{margin-bottom:14px}
+  .pw-wrap{position:relative}
+  .pw-wrap .inp{padding-right:44px}
+  .eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;background:none;border:none;color:var(--muted);cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center}
+  .eye:hover{color:var(--text)}
+  .eye svg{width:18px;height:18px;stroke-width:1.8}
+  #login-error{color:var(--red);font-size:13px;min-height:20px;margin-top:12px;text-align:center}
+
+  /* ---------- Dashboard ---------- */
+  #app{display:none}
+  .topbar{position:sticky;top:0;z-index:50;background:rgba(6,6,8,.88);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .topbar-in{max-width:1180px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:14px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-d);font-weight:700;font-size:16px;letter-spacing:-.01em}
+  .brand img{width:34px;height:34px;object-fit:contain}
+  .chip{font-family:var(--font-b);font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-bg);border:1px solid rgba(168,224,56,.25);padding:2px 8px;border-radius:99px;letter-spacing:0}
+  .topbar .spacer{flex:1}
+  .who{font-size:12.5px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .page{max-width:1180px;margin:0 auto;padding:28px 24px 72px}
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+  .page-head h1{font-size:26px}
+  .page-head p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+
+  .stats{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px}
+  .stat .sl{font-size:12.5px;color:var(--muted)}
+  .stat .sv{font-family:var(--font-d);font-size:22px;font-weight:700;letter-spacing:-.02em;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat.hero .sv{font-size:28px;color:var(--accent)}
+
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+  .toolbar{display:flex;gap:10px;padding:14px;border-bottom:1px solid var(--border);align-items:center}
+  .search-wrap{position:relative;flex:1}
+  .search-wrap svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round;pointer-events:none}
+  .search-wrap .inp{padding-left:36px}
+  .result-count{font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;min-width:780px}
+  th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--border);vertical-align:middle}
+  th{font-size:12px;font-weight:500;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap;background:var(--surface)}
+  th.nosort{cursor:default}
+  th:not(.nosort):hover{color:var(--text)}
+  th.sorted{color:var(--accent)}
+  th .arrow{display:inline-block;width:10px;margin-left:4px;font-size:10px}
+  tbody tr{cursor:pointer;transition:background .12s}
+  tbody tr:hover{background:var(--surface2)}
+  tbody tr:last-child td{border-bottom:none}
+  .who-cell{display:flex;align-items:center;gap:12px;min-width:0}
+  .avatar{width:34px;height:34px;border-radius:50%;background:var(--accent-bg);color:var(--accent);border:1px solid rgba(168,224,56,.22);display:flex;align-items:center;justify-content:center;font-family:var(--font-d);font-weight:600;font-size:13px;flex:none}
+  .avatar.lg{width:44px;height:44px;font-size:16px}
+  .uname{font-weight:500;font-size:14px}
+  .uid{color:var(--muted);font-size:11px;font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+  .badge-you{background:var(--accent-bg);color:var(--accent);font-size:10.5px;padding:1px 7px;border-radius:99px;margin-left:8px;font-weight:600}
+  .bal{font-family:var(--font-d);font-weight:600;font-size:14px;white-space:nowrap}
+  .muted{color:var(--muted)}
+  .row-actions{display:flex;gap:6px;justify-content:flex-end}
+  .empty{padding:56px 20px;text-align:center;color:var(--muted);font-size:13.5px}
+
+  /* ---------- Drawer ---------- */
+  #drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:100;display:none;justify-content:flex-end}
+  #drawer-overlay.open{display:flex}
+  #drawer{width:min(700px,100%);height:100%;background:var(--surface);border-left:1px solid var(--border2);display:flex;flex-direction:column;animation:slidein .2s ease-out}
+  @keyframes slidein{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+  @media (prefers-reduced-motion:reduce){#drawer{animation:none}}
+  .dr-head{padding:20px 24px 16px}
+  .dr-top{display:flex;align-items:center;gap:14px}
+  .dr-id{flex:1;min-width:0}
+  .dr-name{font-family:var(--font-d);font-size:18px;font-weight:600;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dr-total{margin-top:14px;display:flex;align-items:baseline;gap:10px}
+  .dr-total span{font-size:12.5px;color:var(--muted)}
+  .dr-total b{font-family:var(--font-d);font-size:22px;color:var(--accent);letter-spacing:-.02em}
+  .tabs{display:flex;gap:2px;overflow-x:auto;padding:0 16px;border-bottom:1px solid var(--border);flex:none}
+  .tab{background:none;border:none;color:var(--muted);padding:11px 12px;font-size:13px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;margin-bottom:-1px}
+  .tab:hover{color:var(--text)}
+  .tab.on{color:var(--text);border-bottom-color:var(--accent)}
+  .tab small{color:var(--muted);font-size:11px;margin-left:5px;font-weight:400}
+  .dr-body{flex:1;overflow-y:auto;padding:20px 24px 28px}
+  .dr-foot{padding:14px 24px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;flex:none;background:var(--surface)}
+  .dr-foot .spacer{flex:1}
+  #dirty-note{font-size:12px;color:var(--amber);visibility:hidden}
+  .sec-title{font-family:var(--font-d);font-size:14px;font-weight:600;margin:26px 0 10px}
+  .sec-title:first-child{margin-top:0}
+  .hint{font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.55}
+  .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px}
+  .fld.wide{grid-column:1/-1}
+  .wrow{display:grid;grid-template-columns:1fr 150px auto;gap:8px;margin-bottom:8px;align-items:center}
+  .inp.num{text-align:right}
+  .list-head{display:flex;gap:10px;margin-bottom:6px}
+  .erow{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+  .erow .t{font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .erow .meta{display:flex;flex-wrap:wrap;gap:1px 14px;font-size:12px;color:var(--muted);margin-top:2px}
+  .amt{font-family:var(--font-d);font-weight:600;font-size:14px;text-align:right;white-space:nowrap}
+  .amt.pos{color:var(--accent)}
+  .acts{display:flex;gap:6px}
+  .tag{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:99px;border:1px solid var(--border2);color:var(--muted)}
+  .tag.green{color:var(--accent);border-color:rgba(168,224,56,.3);background:var(--accent-bg)}
+  .tag.amber{color:var(--amber);border-color:rgba(232,160,32,.35)}
+  .bar{height:5px;border-radius:99px;background:var(--surface3);margin-top:7px;overflow:hidden;max-width:280px}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+  .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);font-size:13.5px}
+  .kv .k{color:var(--muted)}
+  .kv .v{text-align:right}
+  .none{color:var(--muted);font-size:13px;padding:28px 0;text-align:center}
+
+  /* ---------- Entry dialog + confirm ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
+  #entry-overlay{z-index:200}
+  #confirm-overlay{z-index:300}
+  .dialog{background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);width:100%;max-width:520px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+  .dialog h2{font-size:17px;margin-bottom:16px}
+  .dialog .foot{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+  .err{color:var(--red);font-size:12.5px;min-height:18px;margin-top:12px}
+  #confirm-overlay .dialog{max-width:400px}
+  #confirm-msg{font-size:14px;line-height:1.55}
+
+  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--surface3);border:1px solid var(--border2);color:var(--text);padding:11px 18px;border-radius:10px;font-size:13px;z-index:400;display:none;max-width:90vw;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #toast.err{border-color:rgba(240,72,72,.5);color:#ffb4b4}
+  #toast.ok{border-color:rgba(168,224,56,.45)}
+
+  @media (max-width:820px){
+    .stats{grid-template-columns:1fr 1fr}
+    .stat.hero{grid-column:1/-1}
+    .who{display:none}
+  }
+  @media (max-width:560px){
+    .topbar-in,.page{padding-left:16px;padding-right:16px}
+    .dr-head,.dr-body,.dr-foot{padding-left:16px;padding-right:16px}
+    .wrow{grid-template-columns:1fr 110px auto}
+    .fgrid{grid-template-columns:1fr}
+    .erow{grid-template-columns:1fr auto}
+    .erow .acts{grid-column:1/-1}
+    .result-count{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo"><img src="icon-512.png" alt="FINUITY"></div>
+    <h1>FINUITY Admin</h1>
+    <p class="sub">Sign in with your admin account</p>
+    <form onsubmit="event.preventDefault();doLogin()">
+      <div class="fld">
+        <label class="lbl" for="admin-email">Email</label>
+        <input class="inp" type="email" id="admin-email" placeholder="admin@example.com" autocomplete="username">
+      </div>
+      <div class="fld">
+        <label class="lbl" for="admin-password">Password</label>
+        <div class="pw-wrap">
+          <input class="inp" type="password" id="admin-password" placeholder="Your password" autocomplete="current-password">
+          <button type="button" class="eye" id="pw-eye" onclick="togglePw()" aria-label="Show password"></button>
+        </div>
+      </div>
+      <button type="submit" class="btn primary block" id="login-btn" style="margin-top:8px">Sign in</button>
+    </form>
+    <div id="login-error" role="alert"></div>
+  </div>
+</div>
+
+<!-- ============ DASHBOARD ============ -->
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-in">
+      <div class="brand"><img src="icon-512.png" alt=""> FINUITY <span class="chip">Admin</span></div>
+      <span class="spacer"></span>
+      <span class="who" id="signed-in-as"></span>
+      <button class="btn sm" onclick="refreshUsers(true)">Refresh</button>
+      <button class="btn sm" onclick="signOutAdmin()">Sign out</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="page-head">
+      <div>
+        <h1>Users</h1>
+        <p>View, edit, add and remove every account stored in the cloud.</p>
+      </div>
+      <button class="btn primary" onclick="newUser()">+ Add user</button>
+    </div>
+
+    <div class="stats" id="stat-pills"></div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input class="inp" type="text" id="search" placeholder="Search by username or UID" oninput="renderTable()">
+        </div>
+        <span class="result-count" id="result-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th data-key="username" onclick="setSort('username')">User<span class="arrow"></span></th>
+              <th data-key="totalBalance" onclick="setSort('totalBalance')">Total balance<span class="arrow"></span></th>
+              <th data-key="entryCount" onclick="setSort('entryCount')">Entries<span class="arrow"></span></th>
+              <th data-key="updatedAt" onclick="setSort('updatedAt')">Last updated<span class="arrow"></span></th>
+              <th class="nosort"></th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty-msg" style="display:none">No users match your search.</div>
+    </div>
+  </main>
+</div>
+
+<!-- ============ USER DRAWER ============ -->
+<div id="drawer-overlay" onclick="if(event.target===this)tryCloseDrawer()">
+  <aside id="drawer" role="dialog" aria-modal="true" aria-label="Edit user"></aside>
+</div>
+
+<!-- ============ ENTRY DIALOG ============ -->
+<div class="overlay" id="entry-overlay" onclick="if(event.target===this)closeEntry()">
+  <div class="dialog" id="entry-dialog" role="dialog" aria-modal="true"></div>
+</div>
+
+<!-- ============ CONFIRM ============ -->
+<div class="overlay" id="confirm-overlay">
+  <div class="dialog" role="alertdialog" aria-modal="true">
+    <div id="confirm-msg"></div>
+    <div class="foot">
+      <button class="btn" id="confirm-cancel">Cancel</button>
+      <button class="btn danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBMkUBMpcKy7kMEReov933RIJsKMztB9NA",
+  authDomain: "moneythings-94584.firebaseapp.com",
+  projectId: "moneythings-94584",
+  storageBucket: "moneythings-94584.firebasestorage.app",
+  messagingSenderId: "851470533910",
+  appId: "1:851470533910:web:5fbd6961579f428f46fc37"
+};
+
+let fbAuth, fbDb;
+try{
+  firebase.initializeApp(firebaseConfig);
+  fbAuth = firebase.auth();
+  fbDb = firebase.firestore();
+}catch(err){
+  document.getElementById('login-error').textContent = "Couldn't connect to Firebase. Check your internet connection.";
+}
+
+/* ================= constants that mirror the main app ================= */
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const CAT_LABELS = {food:'🍜 Food',transport:'🚌 Transport',shopping:'🛍️ Shopping',utilities:'💡 Utilities',health:'💊 Health',entertainment:'🎮 Entertainment','loan-payment':'💸 Loan Payment','other-exp':'📦 Other'};
+const LOAN_TYPES = {payable:'I owe them', receivable:'They owe me'};
+
+const EYE_ON  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-8-11-8a21.8 21.8 0 015.06-6.06M9.9 4.24A10.94 10.94 0 0112 4c7 0 11 8 11 8a21.77 21.77 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+function today(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+/* Field definitions: these match exactly what the main app stores. */
+const SCHEMA = {
+  income:{
+    title:'Income', one:'income entry',
+    fields:[
+      {k:'type', label:'Type', t:'select', opts:['Salary','Bonus','Loan Repayment','Other']},
+      {k:'amount', label:'Amount (₱)', t:'number', req:true},
+      {k:'month', label:'Month', t:'select', opts:MONTHS},
+      {k:'year', label:'Year', t:'int'},
+      {k:'wallet', label:'Wallet', t:'wallet'},
+      {k:'dateAdded', label:'Date added', t:'date'},
+      {k:'note', label:'Note', t:'text', wide:true}
+    ],
+    blank:()=>({type:'Salary', amount:0, month:MONTHS[new Date().getMonth()], year:new Date().getFullYear(), note:'', wallet:firstWallet(), dateAdded:today()})
+  },
+  expenses:{
+    title:'Expenses', one:'expense',
+    fields:[
+      {k:'desc', label:'Description', t:'text', req:true, wide:true},
+      {k:'amount', label:'Amount (₱)', t:'number', req:true},
+      {k:'cat', label:'Category', t:'select', opts:Object.entries(CAT_LABELS)},
+      {k:'source', label:'Paid from', t:'wallet'},
+      {k:'date', label:'Date', t:'date'},
+      {k:'note', label:'Note', t:'text', wide:true},
+      {k:'recurring', label:'Recurring expense', t:'bool', wide:true}
+    ],
+    blank:()=>({desc:'', amount:0, cat:'food', source:firstWallet(), date:today(), note:'', recurring:false})
+  },
+  loans:{
+    title:'Loans', one:'loan',
+    fields:[
+      {k:'name', label:'Person / lender', t:'text', req:true},
+      {k:'amount', label:'Amount (₱)', t:'number', req:true},
+      {k:'type', label:'Direction', t:'select', opts:Object.entries(LOAN_TYPES)},
+      {k:'due', label:'Due date', t:'date'},
+      {k:'sourceWallet', label:'Wallet used', t:'wallet', optional:true},
+      {k:'note', label:'Note', t:'text', wide:true},
+      {k:'settled', label:'Settled', t:'bool', wide:true}
+    ],
+    blank:()=>({name:'', amount:0, type:'payable', note:'', due:'', settled:false})
+  },
+  goals:{
+    title:'Goals', one:'savings goal',
+    fields:[
+      {k:'name', label:'Goal name', t:'text', req:true, wide:true},
+      {k:'target', label:'Target (₱)', t:'number', req:true},
+      {k:'saved', label:'Saved so far (₱)', t:'number', req:true},
+      {k:'note', label:'Note', t:'text', wide:true}
+    ],
+    blank:()=>({name:'', target:0, saved:0, note:''})
+  }
+};
+const TABS = [['profile','Profile'],['income','Income'],['expenses','Expenses'],['loans','Loans'],['goals','Goals'],['security','Security'],['raw','Raw JSON']];
+
+/* ================= state ================= */
+let allUsers = [];
+let sortKey = 'totalBalance';
+let sortDir = 'desc';
+let currentUid = null;
+
+let draft = null;      // working copy of users/{uid}.data
+let draftUid = null;
+let isNew = false;
+let origJson = '';     // snapshot used to detect unsaved changes
+let tab = 'profile';
+let entryFilter = {};
+let entryCtx = null;   // {section, idx, orig}
+
+/* ================= helpers ================= */
+const $ = id => document.getElementById(id);
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtPeso(n){
+  return '₱' + Number(n||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function fmtDate(ms){
+  if(!ms) return '—';
+  return new Date(ms).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+}
+function fmtIso(d){
+  if(!d) return '';
+  const p = String(d).split('-');
+  if(p.length === 3){
+    return new Date(+p[0], +p[1]-1, +p[2]).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+  }
+  return String(d);
+}
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+function walletList(){ return Array.isArray(draft && draft.wallets) ? draft.wallets : []; }
+function firstWallet(){ const w = walletList()[0]; return w ? w.id : ''; }
+function walletLabel(id){
+  if(!id) return '—';
+  const w = walletList().find(x => x.id === id);
+  return w ? (w.label || w.id) : String(id);
+}
+function initial(name){ return (String(name||'?').trim()[0] || '?').toUpperCase(); }
+function totalOf(data){
+  const w = Array.isArray(data && data.wallets) ? data.wallets : [];
+  return w.reduce((s,x) => s + (Number(x.balance)||0), 0);
+}
+function defaultUserData(){
+  return {
+    username:'',
+    wallets:[
+      {id:'maya', label:'Maya', balance:0, updated:today()},
+      {id:'gcash', label:'GCash', balance:0, updated:today()},
+      {id:'coh', label:'Cash on Hand', balance:0, updated:today()}
+    ],
+    income:[], expenses:[], loans:[], goals:[],
+    budgetLimit:0, pin:'', pinHash:'', pinSalt:'', nextId:0, hideBalances:false,
+    termsAccepted:null, securityQuestion:'', securityAnswer:'', securityAnswerHash:'', securityAnswerSalt:''
+  };
+}
+/* The main app gives every entry a numeric id from a counter. Keep that counter ahead of every id in use. */
+function nextEntryId(){
+  let max = Number(draft.nextId) || 0;
+  ['income','expenses','loans','goals'].forEach(k => (draft[k]||[]).forEach(e => {
+    const n = Number(e && e.id);
+    if(!isNaN(n) && n > max) max = n;
+  }));
+  draft.nextId = max + 1;
+  return draft.nextId;
+}
+
+let toastTimer;
+function toast(msg, kind){
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = kind || 'ok';
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
+}
+function friendlyError(err){
+  if(err && err.code === 'permission-denied'){
+    return "Permission denied. Update your Firestore rules so the admin account can write, then publish them.";
+  }
+  return (err && err.message) || 'Something went wrong.';
+}
+function confirmBox(msg, okLabel, kind){
+  return new Promise(resolve => {
+    const ov = $('confirm-overlay'), ok = $('confirm-ok'), cancel = $('confirm-cancel');
+    $('confirm-msg').innerHTML = msg;
+    ok.textContent = okLabel || 'Delete';
+    ok.className = 'btn ' + (kind === 'primary' ? 'primary' : 'danger');
+    ov.style.display = 'flex';
+    cancel.focus();
+    const done = v => { ov.style.display = 'none'; ok.onclick = null; cancel.onclick = null; resolve(v); };
+    ok.onclick = () => done(true);
+    cancel.onclick = () => done(false);
+  });
+}
+
+/* ================= auth ================= */
+$('pw-eye').innerHTML = EYE_ON;
+function togglePw(){
+  const i = $('admin-password');
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  $('pw-eye').innerHTML = show ? EYE_OFF : EYE_ON;
+  $('pw-eye').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+}
+async function doLogin(){
+  const email = $('admin-email').value.trim();
+  const pw = $('admin-password').value;
+  const errEl = $('login-error');
+  const btn = $('login-btn');
+  errEl.textContent = '';
+  if(!email || !pw){ errEl.textContent = 'Enter your email and password.'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try{
+    await fbAuth.signInWithEmailAndPassword(email, pw);
+  }catch(err){
+    errEl.textContent = err.message || 'Sign in failed.';
+  }
+  btn.disabled = false; btn.textContent = 'Sign in';
+}
+function signOutAdmin(){ fbAuth.signOut(); }
+
+fbAuth && fbAuth.onAuthStateChanged(async (user) => {
+  if(!user){
+    $('login-screen').style.display = 'flex';
+    $('app').style.display = 'none';
+    $('admin-password').value = '';
+    if($('admin-password').type === 'text') togglePw();
+    closeDrawerNow();
+    return;
+  }
+  currentUid = user.uid;
+  $('signed-in-as').textContent = user.email || '';
+  await loadAllUsers();
+});
+
+/* ================= READ ================= */
+async function fetchUsers(){
+  const snap = await fbDb.collection('users').get();
+  const list = [];
+  snap.forEach(doc => {
+    const raw = doc.data() || {};
+    const data = raw.data || {};
+    const counts = {
+      income:(data.income||[]).length, expenses:(data.expenses||[]).length,
+      loans:(data.loans||[]).length, goals:(data.goals||[]).length
+    };
+    list.push({
+      uid: doc.id,
+      username: data.username || '(no name set)',
+      totalBalance: totalOf(data),
+      counts,
+      entryCount: counts.income + counts.expenses + counts.loans + counts.goals,
+      updatedAt: raw.updatedAt || 0,
+      fullData: data
+    });
+  });
+  allUsers = list;
+}
+
+async function loadAllUsers(){
+  try{
+    await fetchUsers();
+    $('login-screen').style.display = 'none';
+    $('app').style.display = 'block';
+    renderStats();
+    renderTable();
+  }catch(err){
+    $('login-screen').style.display = 'flex';
+    $('app').style.display = 'none';
+    $('login-error').textContent = err.code === 'permission-denied'
+      ? "Signed in, but this account isn't allowed to view all users. Check the Firestore security rules."
+      : 'Could not load users: ' + err.message;
+    fbAuth.signOut();
+  }
+}
+async function refreshUsers(showToast){
+  try{
+    await fetchUsers();
+    renderStats();
+    renderTable();
+    if(showToast) toast('Refreshed');
+  }catch(err){
+    toast(friendlyError(err), 'err');
+  }
+}
+
+function renderStats(){
+  const total = allUsers.length;
+  const sumAll = allUsers.reduce((s,u) => s + u.totalBalance, 0);
+  const entries = allUsers.reduce((s,u) => s + u.entryCount, 0);
+  const top = allUsers.slice().sort((a,b) => b.totalBalance - a.totalBalance)[0];
+  $('stat-pills').innerHTML = `
+    <div class="stat hero"><div class="sl">Combined balance</div><div class="sv">${fmtPeso(sumAll)}</div></div>
+    <div class="stat"><div class="sl">Users</div><div class="sv">${total}</div></div>
+    <div class="stat"><div class="sl">Total entries</div><div class="sv">${entries.toLocaleString()}</div></div>
+    <div class="stat"><div class="sl">Top balance</div><div class="sv">${top ? esc(top.username) : '—'}</div></div>`;
+}
+
+function setSort(key){
+  if(sortKey === key){ sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
+  else { sortKey = key; sortDir = key === 'username' ? 'asc' : 'desc'; }
+  renderTable();
+}
+
+function renderTable(){
+  const q = $('search').value.trim().toLowerCase();
+  const rows = allUsers.filter(u => !q || u.username.toLowerCase().includes(q) || u.uid.toLowerCase().includes(q));
+  rows.sort((a,b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if(typeof av === 'string'){ av = av.toLowerCase(); bv = bv.toLowerCase(); }
+    if(av < bv) return sortDir === 'asc' ? -1 : 1;
+    if(av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+  document.querySelectorAll('th[data-key]').forEach(th => {
+    const on = th.dataset.key === sortKey;
+    th.classList.toggle('sorted', on);
+    th.querySelector('.arrow').textContent = on ? (sortDir === 'asc' ? '▲' : '▼') : '';
+  });
+  $('result-count').textContent = rows.length === allUsers.length
+    ? rows.length + (rows.length === 1 ? ' user' : ' users')
+    : rows.length + ' of ' + allUsers.length;
+  $('empty-msg').style.display = rows.length ? 'none' : 'block';
+  $('table-body').innerHTML = rows.map(u => `
+    <tr onclick="openDetail('${u.uid}')">
+      <td><div class="who-cell">
+        <div class="avatar">${esc(initial(u.username))}</div>
+        <div style="min-width:0"><div class="uname">${esc(u.username)}${u.uid === currentUid ? '<span class="badge-you">you</span>' : ''}</div><div class="uid">${esc(u.uid)}</div></div>
+      </div></td>
+      <td class="bal">${fmtPeso(u.totalBalance)}</td>
+      <td title="Income ${u.counts.income}, expenses ${u.counts.expenses}, loans ${u.counts.loans}, goals ${u.counts.goals}">${u.entryCount}</td>
+      <td class="muted">${fmtDate(u.updatedAt)}</td>
+      <td><div class="row-actions">
+        <button class="btn sm" onclick="event.stopPropagation();openDetail('${u.uid}')">Edit</button>
+        <button class="btn sm danger" onclick="event.stopPropagation();deleteUser('${u.uid}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+}
+
+/* ================= CREATE / UPDATE: drawer ================= */
+function newUser(){
+  isNew = true;
+  draftUid = fbDb.collection('users').doc().id;
+  draft = defaultUserData();
+  origJson = JSON.stringify(draft);
+  tab = 'profile'; entryFilter = {};
+  $('drawer-overlay').classList.add('open');
+  renderDrawer();
+}
+function openDetail(uid){
+  const u = allUsers.find(x => x.uid === uid);
+  if(!u) return;
+  isNew = false;
+  draftUid = uid;
+  draft = clone(u.fullData);
+  origJson = JSON.stringify(draft);
+  tab = 'profile'; entryFilter = {};
+  $('drawer-overlay').classList.add('open');
+  renderDrawer();
+}
+function isDirty(){ return !!draft && JSON.stringify(draft) !== origJson; }
+async function tryCloseDrawer(){
+  if(isDirty()){
+    const ok = await confirmBox('Discard your unsaved changes?', 'Discard');
+    if(!ok) return;
+  }
+  closeDrawerNow();
+}
+function closeDrawerNow(){
+  $('drawer-overlay').classList.remove('open');
+  $('entry-overlay').style.display = 'none';
+  draft = null; entryCtx = null;
+}
+function setTab(t){ tab = t; renderDrawer(); }
+
+function updateDirty(){
+  const d = isDirty();
+  const note = $('dirty-note'), save = $('save-btn');
+  if(note) note.style.visibility = d ? 'visible' : 'hidden';
+  if(save) save.disabled = !isNew && !d;
+}
+function updateTotals(){
+  const el = $('dr-total');
+  if(el) el.textContent = fmtPeso(totalOf(draft));
+}
+
+function renderDrawer(){
+  if(!draft) return;
+  const body0 = document.querySelector('#drawer .dr-body');
+  const keepScroll = body0 ? body0.scrollTop : 0;
+  const name = draft.username || (isNew ? 'New user' : '(no name set)');
+
+  const tabsHtml = TABS.map(([k,label]) => {
+    const n = SCHEMA[k] ? (draft[k]||[]).length : null;
+    return `<button class="tab ${tab===k?'on':''}" onclick="setTab('${k}')">${label}${n !== null ? `<small>${n}</small>` : ''}</button>`;
+  }).join('');
+
+  let bodyHtml = '';
+  if(tab === 'profile') bodyHtml = tabProfile();
+  else if(SCHEMA[tab]) bodyHtml = tabEntries(tab);
+  else if(tab === 'security') bodyHtml = tabSecurity();
+  else bodyHtml = tabRaw();
+
+  $('drawer').innerHTML = `
+    <div class="dr-head">
+      <div class="dr-top">
+        <div class="avatar lg" id="dr-avatar">${esc(initial(draft.username))}</div>
+        <div class="dr-id">
+          <div class="dr-name" id="dr-name">${esc(name)}</div>
+          <div class="uid">${esc(draftUid)}${isNew ? ' (new, auto-generated)' : ''}</div>
+        </div>
+        <button class="icon-btn" onclick="tryCloseDrawer()" aria-label="Close">✕</button>
+      </div>
+      <div class="dr-total"><span>Total balance</span><b id="dr-total">${fmtPeso(totalOf(draft))}</b></div>
+    </div>
+    <div class="tabs" role="tablist">${tabsHtml}</div>
+    <div class="dr-body">${bodyHtml}</div>
+    <div class="dr-foot">
+      ${isNew ? '' : `<button class="btn danger" onclick="deleteUser('${esc(draftUid)}')">Delete user</button>`}
+      <span class="spacer"></span>
+      <span id="dirty-note">Unsaved changes</span>
+      <button class="btn" onclick="tryCloseDrawer()">Close</button>
+      <button class="btn primary" id="save-btn" onclick="saveUser()">${isNew ? 'Create user' : 'Save changes'}</button>
+    </div>`;
+
+  if(SCHEMA[tab]) drawEntryList(tab);
+  const body = document.querySelector('#drawer .dr-body');
+  if(body) body.scrollTop = keepScroll;
+  updateDirty();
+}
+
+/* ----- Profile tab ----- */
+function tabProfile(){
+  const wallets = walletList();
+  let h = `
+    <div class="fgrid">
+      <div class="fld wide">
+        <label class="lbl" for="f-username">Username</label>
+        <input class="inp" id="f-username" value="${esc(draft.username||'')}" placeholder="Username" oninput="onUsername(this.value)">
+      </div>
+      <div class="fld">
+        <label class="lbl" for="f-budget">Monthly budget limit (₱)</label>
+        <input class="inp" id="f-budget" type="number" step="0.01" min="0" value="${Number(draft.budgetLimit)||0}" oninput="draft.budgetLimit=parseFloat(this.value)||0;updateDirty()">
+      </div>
+    </div>
+    <div class="sec-title">Wallets</div>`;
+  wallets.forEach((w,i) => {
+    h += `<div class="wrow">
+      <input class="inp" value="${esc(w.label != null ? w.label : (w.id||''))}" placeholder="Wallet name" aria-label="Wallet name" oninput="setWallet(${i},'label',this.value)">
+      <input class="inp num" type="number" step="0.01" value="${Number(w.balance)||0}" aria-label="Balance" oninput="setWallet(${i},'balance',this.value)">
+      <button class="icon-btn" onclick="removeWallet(${i})" aria-label="Remove wallet" title="Remove wallet">✕</button>
+    </div>`;
+  });
+  if(!wallets.length) h += `<div class="none" style="padding:14px 0">No wallets yet.</div>`;
+  h += `<button class="btn sm" onclick="addWallet()">+ Add wallet</button>
+    <p class="hint">Editing a wallet balance here changes the number only. It does not add or remove any income or expense entries. If this person has the app open, their next sync can overwrite your edits.</p>`;
+  return h;
+}
+function onUsername(v){
+  draft.username = v;
+  const n = $('dr-name'), a = $('dr-avatar');
+  if(n) n.textContent = v || (isNew ? 'New user' : '(no name set)');
+  if(a) a.textContent = initial(v);
+  updateDirty();
+}
+function setWallet(i, key, val){
+  const w = draft.wallets[i];
+  if(key === 'balance'){ w.balance = Math.round((parseFloat(val)||0)*100)/100; w.updated = today(); updateTotals(); }
+  else w[key] = val;
+  updateDirty();
+}
+function addWallet(){
+  if(!Array.isArray(draft.wallets)) draft.wallets = [];
+  draft.wallets.push({id:'w'+Date.now().toString(36), label:'New wallet', balance:0, updated:today()});
+  renderDrawer();
+}
+async function removeWallet(i){
+  const w = draft.wallets[i];
+  const ok = await confirmBox(`Remove wallet <b>${esc(w.label || w.id)}</b> (${fmtPeso(w.balance)})?<br><span class="muted" style="font-size:12.5px">Entries that used this wallet keep pointing to it. Nothing is saved until you click Save changes.</span>`, 'Remove');
+  if(!ok) return;
+  draft.wallets.splice(i,1);
+  renderDrawer();
+}
+
+/* ----- Entry lists (income / expenses / loans / goals) ----- */
+function tabEntries(sec){
+  const s = SCHEMA[sec];
+  return `
+    <div class="list-head">
+      <input class="inp" id="entry-filter" placeholder="Filter ${s.title.toLowerCase()}" aria-label="Filter" value="${esc(entryFilter[sec]||'')}" oninput="entryFilter['${sec}']=this.value;drawEntryList('${sec}')">
+      <button class="btn primary" onclick="openEntry('${sec}',null)">+ Add</button>
+    </div>
+    <div id="entry-list"></div>
+    <p class="hint">Changing an entry here doesn't adjust wallet balances. Edit the balances on the Profile tab if they need to match.</p>`;
+}
+function rowView(sec, e){
+  const m = (...a) => a.filter(Boolean).map(x => `<span>${esc(x)}</span>`).join('');
+  if(sec === 'income'){
+    return {title:esc(e.type||'Income'), meta:m(walletLabel(e.wallet), e.dateAdded ? fmtIso(e.dateAdded) : ((e.month||'')+' '+(e.year||'')).trim(), e.note),
+            amt:'+'+fmtPeso(e.amount), cls:'pos'};
+  }
+  if(sec === 'expenses'){
+    return {title:esc(e.desc||'(no description)') + (e.recurring ? ' <span class="tag">recurring</span>' : ''),
+            meta:m(CAT_LABELS[e.cat]||e.cat, walletLabel(e.source), fmtIso(e.date), e.note), amt:fmtPeso(e.amount), cls:''};
+  }
+  if(sec === 'loans'){
+    return {title:esc(e.name||'(no name)') + (e.settled ? ' <span class="tag green">settled</span>' : ' <span class="tag amber">open</span>'),
+            meta:m(LOAN_TYPES[e.type]||e.type, e.due ? 'Due '+fmtIso(e.due) : '', e.note), amt:fmtPeso(e.amount), cls:''};
+  }
+  const pct = Number(e.target) > 0 ? Math.min(100, Math.round((Number(e.saved)||0)/Number(e.target)*100)) : 0;
+  return {title:esc(e.name||'(no name)'),
+          meta:m(fmtPeso(e.saved)+' saved of '+fmtPeso(e.target), e.note) + `<div class="bar" style="flex-basis:100%"><i style="width:${pct}%"></i></div>`,
+          amt:pct+'%', cls:'pos'};
+}
+function drawEntryList(sec){
+  const host = $('entry-list');
+  if(!host) return;
+  const arr = draft[sec] || [];
+  const q = (entryFilter[sec]||'').trim().toLowerCase();
+  let items = arr.map((e,i) => ({e,i}));
+  if(q) items = items.filter(({e}) => JSON.stringify(e).toLowerCase().includes(q));
+  if(sec === 'income' || sec === 'expenses'){
+    items.sort((a,b) => {
+      const ka = String(a.e.date || a.e.dateAdded || ''), kb = String(b.e.date || b.e.dateAdded || '');
+      return kb < ka ? -1 : kb > ka ? 1 : b.i - a.i;
+    });
+  }else{
+    items.reverse();
+  }
+  if(!items.length){
+    host.innerHTML = `<div class="none">${arr.length ? 'Nothing matches that filter.' : 'No ' + SCHEMA[sec].title.toLowerCase() + ' yet. Use + Add to create one.'}</div>`;
+    return;
+  }
+  host.innerHTML = items.map(({e,i}) => {
+    const v = rowView(sec, e);
+    return `<div class="erow">
+      <div style="min-width:0"><div class="t">${v.title}</div><div class="meta">${v.meta}</div></div>
+      <div class="amt ${v.cls}">${esc(v.amt)}</div>
+      <div class="acts">
+        <button class="btn sm" onclick="openEntry('${sec}',${i})">Edit</button>
+        <button class="btn sm danger" onclick="removeEntry('${sec}',${i})">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function removeEntry(sec, i){
+  const v = rowView(sec, draft[sec][i]);
+  const ok = await confirmBox(`Delete this ${SCHEMA[sec].one}?<br><b>${v.title.replace(/<span.*?<\/span>/g,'')}</b> ${esc(v.amt)}<br><span class="muted" style="font-size:12.5px">Nothing is saved until you click Save changes.</span>`, 'Delete');
+  if(!ok) return;
+  draft[sec].splice(i,1);
+  renderDrawer();
+}
+
+/* ----- Entry dialog ----- */
+function fieldHtml(f, val){
+  const id = 'ef-' + f.k;
+  const cls = 'fld' + (f.wide ? ' wide' : '');
+  if(f.t === 'bool'){
+    return `<div class="${cls}"><label class="check"><input type="checkbox" id="${id}" ${val ? 'checked' : ''}> ${esc(f.label)}</label></div>`;
+  }
+  let control;
+  if(f.t === 'select' || f.t === 'wallet'){
+    let opts = f.t === 'wallet'
+      ? [['', f.optional ? 'None' : '— choose a wallet —']].concat(walletList().map(w => [w.id, w.label || w.id]))
+      : f.opts.map(o => Array.isArray(o) ? o : [o,o]);
+    if(val !== undefined && val !== null && val !== '' && !opts.some(o => o[0] === val)) opts = opts.concat([[val, String(val)+' (current)']]);
+    control = `<select class="inp" id="${id}">${opts.map(o => `<option value="${esc(o[0])}" ${String(o[0])===String(val==null?'':val)?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`;
+  }else if(f.t === 'number'){
+    control = `<input class="inp" id="${id}" type="number" step="0.01" value="${esc(val==null?'':val)}">`;
+  }else if(f.t === 'int'){
+    control = `<input class="inp" id="${id}" type="number" step="1" value="${esc(val==null?'':val)}">`;
+  }else if(f.t === 'date'){
+    control = `<input class="inp" id="${id}" type="date" value="${esc(val||'')}">`;
+  }else{
+    control = `<input class="inp" id="${id}" type="text" value="${esc(val==null?'':val)}">`;
+  }
+  return `<div class="${cls}"><label class="lbl" for="${id}">${esc(f.label)}</label>${control}</div>`;
+}
+function openEntry(sec, idx){
+  const s = SCHEMA[sec];
+  const orig = idx === null ? s.blank() : draft[sec][idx];
+  entryCtx = {section:sec, idx, orig};
+  $('entry-dialog').innerHTML = `
+    <h2>${idx === null ? 'Add' : 'Edit'} ${esc(s.one)}</h2>
+    <div class="fgrid">${s.fields.map(f => fieldHtml(f, orig[f.k])).join('')}</div>
+    <div class="err" id="entry-error" role="alert"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeEntry()">Cancel</button>
+      <button class="btn primary" onclick="saveEntry()">${idx === null ? 'Add to list' : 'Update entry'}</button>
+    </div>`;
+  $('entry-overlay').style.display = 'flex';
+  const first = $('entry-dialog').querySelector('input:not([type=checkbox]),select');
+  if(first) first.focus();
+}
+function closeEntry(){
+  $('entry-overlay').style.display = 'none';
+  entryCtx = null;
+}
+function saveEntry(){
+  const {section, idx, orig} = entryCtx;
+  const s = SCHEMA[section];
+  const errEl = $('entry-error');
+  const out = {};
+  for(const f of s.fields){
+    const el = $('ef-' + f.k);
+    if(f.t === 'bool'){ out[f.k] = el.checked; continue; }
+    if(f.t === 'number'){
+      const v = parseFloat(el.value);
+      if(isNaN(v)){ errEl.textContent = f.label + ' must be a number.'; el.focus(); return; }
+      if(v < 0){ errEl.textContent = f.label + " can't be negative."; el.focus(); return; }
+      out[f.k] = Math.round(v*100)/100; continue;
+    }
+    if(f.t === 'int'){
+      const v = parseInt(el.value, 10);
+      out[f.k] = isNaN(v) ? '' : v; continue;
+    }
+    const v = f.t === 'text' ? el.value.trim() : el.value;
+    if(f.req && !v){ errEl.textContent = f.label + ' is required.'; el.focus(); return; }
+    out[f.k] = v;
+  }
+  const merged = Object.assign({}, orig, out);   // keeps any extra fields the app added
+  s.fields.forEach(f => { if(f.optional && merged[f.k] === '') delete merged[f.k]; });
+  if(!Array.isArray(draft[section])) draft[section] = [];
+  if(idx === null){ merged.id = nextEntryId(); draft[section].push(merged); }
+  else draft[section][idx] = merged;
+  closeEntry();
+  renderDrawer();
+}
+
+/* ----- Security tab ----- */
+function tabSecurity(){
+  const hasPin = !!(draft.pinHash || draft.pin);
+  const hasQ = !!draft.securityQuestion;
+  return `
+    <div class="sec-title">Account lock</div>
+    <div class="kv"><span class="k">PIN lock</span><span class="v">${hasPin ? '<span class="tag green">set</span>' : '<span class="tag">not set</span>'}</span></div>
+    <div class="kv"><span class="k">Recovery question</span><span class="v">${hasQ ? esc(draft.securityQuestion) : '<span class="tag">not set</span>'}</span></div>
+    <div class="kv"><span class="k">Balances hidden in app</span><span class="v">${draft.hideBalances ? 'Yes' : 'No'}</span></div>
+    <div class="kv"><span class="k">Terms accepted</span><span class="v">${draft.termsAccepted ? 'Yes' : 'No'}</span></div>
+    <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
+      <button class="btn danger" ${hasPin ? '' : 'disabled'} onclick="removePin()">Remove PIN</button>
+      <button class="btn danger" ${hasQ ? '' : 'disabled'} onclick="clearRecovery()">Clear recovery question</button>
+    </div>
+    <p class="hint">Use Remove PIN when someone is locked out of their own data. PINs and answers are stored as hashes, so they can't be read here, only cleared. Changes apply when you click Save changes.</p>`;
+}
+async function removePin(){
+  const ok = await confirmBox('Remove this user\'s PIN? They will be able to open the app without one.', 'Remove PIN');
+  if(!ok) return;
+  draft.pin = ''; draft.pinHash = ''; draft.pinSalt = '';
+  renderDrawer();
+}
+async function clearRecovery(){
+  const ok = await confirmBox('Clear this user\'s recovery question and answer?', 'Clear');
+  if(!ok) return;
+  draft.securityQuestion = ''; draft.securityAnswer = ''; draft.securityAnswerHash = ''; draft.securityAnswerSalt = '';
+  renderDrawer();
+}
+
+/* ----- Raw JSON tab ----- */
+function tabRaw(){
+  return `
+    <div class="sec-title">Raw data</div>
+    <textarea class="inp" id="raw-json" rows="22" spellcheck="false">${esc(JSON.stringify(draft, null, 2))}</textarea>
+    <div class="err" id="raw-error" role="alert"></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+      <button class="btn" onclick="applyRaw()">Apply JSON</button>
+      <span class="muted" style="font-size:12.5px">For advanced fixes. This replaces everything in the draft, so double-check it before saving.</span>
+    </div>`;
+}
+function applyRaw(){
+  const errEl = $('raw-error');
+  try{
+    const parsed = JSON.parse($('raw-json').value);
+    if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('The top level must be an object { … }.');
+    draft = parsed;
+    errEl.textContent = '';
+    renderDrawer();
+    toast('JSON applied to the draft. Click Save changes to store it.');
+  }catch(e){
+    errEl.textContent = "That isn't valid JSON: " + e.message;
+  }
+}
+
+/* ================= write to Firestore ================= */
+async function saveUser(){
+  const btn = $('save-btn');
+  draft.username = (draft.username || '').trim();
+  if(!draft.username){ toast('Enter a username first.', 'err'); if(tab !== 'profile') setTab('profile'); return; }
+  btn.disabled = true;
+  try{
+    const ref = fbDb.collection('users').doc(draftUid);
+    const payload = { data: clone(draft), updatedAt: Date.now() };
+    if(isNew) await ref.set(payload);
+    else await ref.update(payload);
+    const wasNew = isNew;
+    isNew = false;
+    origJson = JSON.stringify(draft);
+    await fetchUsers();
+    renderStats();
+    renderTable();
+    renderDrawer();
+    toast(wasNew ? 'User created' : 'Changes saved');
+  }catch(err){
+    toast(friendlyError(err), 'err');
+    updateDirty();
+  }
+}
+
+/* ================= DELETE ================= */
+async function deleteUser(uid){
+  const u = allUsers.find(x => x.uid === uid);
+  const name = u ? u.username : (draft && draft.username) || uid;
+  const self = uid === currentUid ? '<br><b style="color:var(--red)">This is the account you are signed in with.</b>' : '';
+  const ok = await confirmBox(
+    `Delete <b>${esc(name)}</b> and all of their data?${self}<br><span class="muted" style="font-size:12.5px">This can't be undone. Their sign-in stays in Firebase Authentication.</span>`,
+    'Delete user'
+  );
+  if(!ok) return;
+  try{
+    if(!(isNew && uid === draftUid)) await fbDb.collection('users').doc(uid).delete();
+    closeDrawerNow();
+    await fetchUsers();
+    renderStats();
+    renderTable();
+    toast('User deleted');
+  }catch(err){
+    toast(friendlyError(err), 'err');
+  }
+}
+
+/* ================= keyboard ================= */
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape') return;
+  if($('confirm-overlay').style.display === 'flex'){ $('confirm-cancel').click(); return; }
+  if($('entry-overlay').style.display === 'flex'){ closeEntry(); return; }
+  if($('drawer-overlay').classList.contains('open')) tryCloseDrawer();
+});
+</script>
+</body>
+</html>
