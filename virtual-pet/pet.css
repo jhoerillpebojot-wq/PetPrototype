@@ -1,0 +1,236 @@
+/* ============================================================
+   FINUITY Virtual Pet — "Fin"
+   Self-contained styling. Uses the host app's CSS variables
+   (--accent, --surface, --border, --text, --muted, --red,
+   --amber, --font-b, --font-d) so it re-themes automatically
+   with light/dark mode. Safe to delete this whole file (and
+   virtual-pet/pet.js + pet-dialogue.js, and their two <script>/
+   <link> tags in index.html) to remove the feature entirely.
+   ============================================================ */
+
+#fin-pet-root{
+  position:fixed;
+  right:18px;
+  bottom:22px;
+  z-index:1200;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:10px;
+  font-family:var(--font-b);
+  pointer-events:none; /* re-enabled on interactive children */
+}
+#fin-pet-root *{box-sizing:border-box;}
+#fin-pet-root.fin-hidden{display:none;}
+
+/* ---------- speech bubble ---------- */
+.fin-bubble{
+  pointer-events:auto;
+  max-width:250px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:16px 16px 4px 16px;
+  box-shadow:0 14px 34px rgba(0,0,0,.28);
+  padding:12px 14px;
+  font-size:12.5px;
+  line-height:1.55;
+  color:var(--text);
+  opacity:0;
+  transform:translateY(8px) scale(.96);
+  transform-origin:bottom right;
+  transition:opacity .22s ease, transform .22s ease;
+  position:relative;
+}
+.fin-bubble.fin-show{opacity:1;transform:translateY(0) scale(1);}
+.fin-bubble-close{
+  position:absolute;top:6px;right:8px;
+  background:none;border:none;cursor:pointer;
+  color:var(--muted2);font-size:13px;line-height:1;
+  padding:2px;
+}
+.fin-bubble-close:hover{color:var(--muted);}
+.fin-bubble-text{padding-right:14px;white-space:pre-line;}
+.fin-bubble-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+.fin-bubble-btn{
+  pointer-events:auto;
+  background:var(--accent);
+  color:#080808;
+  border:none;
+  font-family:var(--font-d);
+  font-weight:700;
+  font-size:11.5px;
+  padding:6px 11px;
+  border-radius:8px;
+  cursor:pointer;
+  transition:background .15s;
+  white-space:nowrap;
+}
+.fin-bubble-btn:hover{background:var(--accent-dim);}
+.fin-bubble-btn.fin-secondary{
+  background:transparent;
+  color:var(--muted);
+  border:1px solid var(--border2);
+}
+.fin-bubble-btn.fin-secondary:hover{color:var(--text);border-color:var(--muted);}
+
+/* ---------- avatar ---------- */
+.fin-avatar-wrap{
+  pointer-events:auto;
+  position:relative;
+  width:58px;height:58px;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.fin-avatar-wrap:active .fin-avatar-svg{transform:scale(.93);}
+.fin-avatar-svg{
+  width:100%;height:100%;
+  display:block;
+  filter:drop-shadow(0 8px 16px rgba(0,0,0,.35));
+  transition:transform .12s ease;
+}
+.fin-body{fill:var(--accent);}
+.fin-belly{fill:var(--surface);opacity:.9;}
+.fin-eye{fill:#111;}
+.fin-pupil{fill:#111;}
+.fin-mouth{stroke:#111;stroke-width:2.4;fill:none;stroke-linecap:round;}
+.fin-cheek{fill:#ff8fa3;opacity:.55;}
+.fin-brow{stroke:#111;stroke-width:2.2;fill:none;stroke-linecap:round;}
+
+/* idle: gentle bob + occasional blink handled via CSS animation on body */
+.fin-state-idle .fin-avatar-svg{animation:fin-bob 2.6s ease-in-out infinite;}
+@keyframes fin-bob{
+  0%,100%{transform:translateY(0) rotate(0deg);}
+  50%{transform:translateY(-4px) rotate(-1.5deg);}
+}
+
+/* talking: quick mouth/body pulse */
+.fin-state-talking .fin-avatar-svg{animation:fin-talk .32s ease-in-out infinite;}
+@keyframes fin-talk{
+  0%,100%{transform:scaleY(1);}
+  50%{transform:scaleY(.96) scaleX(1.02);}
+}
+
+/* happy: little hop + sparkle */
+.fin-state-happy .fin-avatar-svg{animation:fin-hop .5s ease-in-out 2;}
+@keyframes fin-hop{
+  0%,100%{transform:translateY(0) scale(1);}
+  35%{transform:translateY(-10px) scale(1.05,.95);}
+  55%{transform:translateY(0) scale(.97,1.04);}
+}
+.fin-sparkle{
+  position:absolute;inset:0;pointer-events:none;
+  opacity:0;
+}
+.fin-state-happy .fin-sparkle{opacity:1;animation:fin-sparkle-fade 1.1s ease-out forwards;}
+@keyframes fin-sparkle-fade{
+  0%{opacity:1;transform:scale(.6);}
+  100%{opacity:0;transform:scale(1.3);}
+}
+
+/* thinking: tilt + dots */
+.fin-state-thinking .fin-avatar-svg{animation:fin-tilt 1.6s ease-in-out infinite;}
+@keyframes fin-tilt{
+  0%,100%{transform:rotate(0deg);}
+  50%{transform:rotate(6deg);}
+}
+.fin-think-dots{
+  position:absolute;top:-6px;right:-2px;
+  display:none;gap:2px;
+}
+.fin-state-thinking .fin-think-dots{display:flex;}
+.fin-think-dots span{
+  width:4px;height:4px;border-radius:50%;
+  background:var(--muted);
+  animation:fin-dot-bounce 1s ease-in-out infinite;
+}
+.fin-think-dots span:nth-child(2){animation-delay:.15s;}
+.fin-think-dots span:nth-child(3){animation-delay:.3s;}
+@keyframes fin-dot-bounce{0%,80%,100%{transform:translateY(0);opacity:.4;}40%{transform:translateY(-4px);opacity:1;}}
+
+/* concerned: shake + furrowed brow (brow drawn conditionally in JS) */
+.fin-state-concerned .fin-avatar-svg{animation:fin-shake .4s ease-in-out;}
+@keyframes fin-shake{
+  0%,100%{transform:translateX(0);}
+  20%{transform:translateX(-3px);}
+  40%{transform:translateX(3px);}
+  60%{transform:translateX(-2px);}
+  80%{transform:translateX(2px);}
+}
+
+/* sleeping: dim + slow breathing + Zzz */
+.fin-state-sleeping .fin-avatar-svg{animation:fin-breathe 3.4s ease-in-out infinite;opacity:.72;}
+@keyframes fin-breathe{
+  0%,100%{transform:scale(1);}
+  50%{transform:scale(1.035);}
+}
+.fin-zzz{
+  position:absolute;top:-14px;right:-6px;
+  font-size:13px;font-weight:700;color:var(--muted);
+  display:none;
+  animation:fin-zzz-float 2.4s ease-in-out infinite;
+}
+.fin-state-sleeping .fin-zzz{display:block;}
+@keyframes fin-zzz-float{
+  0%{opacity:0;transform:translateY(4px);}
+  30%{opacity:1;}
+  100%{opacity:0;transform:translateY(-10px);}
+}
+
+/* ---------- minimized tab ---------- */
+.fin-min-tab{
+  pointer-events:auto;
+  display:none;
+  align-items:center;
+  gap:6px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:999px;
+  padding:7px 12px 7px 8px;
+  cursor:pointer;
+  box-shadow:0 8px 20px rgba(0,0,0,.25);
+  font-size:11.5px;
+  color:var(--muted);
+  font-weight:600;
+}
+#fin-pet-root.fin-minimized .fin-min-tab{display:flex;}
+#fin-pet-root.fin-minimized .fin-avatar-wrap,
+#fin-pet-root.fin-minimized .fin-bubble{display:none;}
+.fin-min-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;}
+
+/* minimize control shown on the avatar corner */
+.fin-min-btn{
+  pointer-events:auto;
+  position:absolute;
+  top:-4px;left:-4px;
+  width:18px;height:18px;
+  border-radius:50%;
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  color:var(--muted);
+  font-size:10px;
+  line-height:1;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;
+  opacity:0;
+  transition:opacity .15s;
+}
+.fin-avatar-wrap:hover .fin-min-btn{opacity:1;}
+
+/* ---------- responsive ---------- */
+@media(max-width:900px){
+  #fin-pet-root{
+    right:12px;
+    bottom:calc(72px + max(8px, env(safe-area-inset-bottom)));
+  }
+  .fin-avatar-wrap{width:48px;height:48px;}
+  .fin-bubble{max-width:min(72vw,230px);font-size:12px;}
+}
+@media(max-width:380px){
+  .fin-bubble{max-width:64vw;padding:10px 12px;}
+  .fin-avatar-wrap{width:44px;height:44px;}
+}
+
+/* respect reduced-motion preference */
+@media(prefers-reduced-motion:reduce){
+  .fin-avatar-svg,.fin-sparkle,.fin-think-dots span,.fin-zzz{animation:none !important;}
+}
