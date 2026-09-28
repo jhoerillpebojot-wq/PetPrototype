@@ -9,7 +9,7 @@
    ============================================================ */
 
 #fin-pet-root{
-  --fin-avatar-size:58px;
+  --fin-avatar-size:clamp(96px, min(9vw, 17vh), 150px); /* scales with the screen: never below 96px or above 150px */
   position:fixed;
   right:18px;
   bottom:22px;
@@ -101,7 +101,7 @@
 .fin-avatar-wrap{
   pointer-events:auto;
   position:relative;
-  width:58px;height:58px;
+  width:var(--fin-avatar-size);height:var(--fin-avatar-size);
   cursor:grab;
   -webkit-tap-highlight-color:transparent;
   touch-action:none;
@@ -109,42 +109,22 @@
 #fin-pet-root.fin-dragging .fin-avatar-wrap{cursor:grabbing;}
 #fin-pet-root.fin-dragging{transition:none;}
 #fin-pet-root.fin-dragging .fin-avatar-svg{animation:none !important;}
-.fin-avatar-wrap:active .fin-avatar-svg{transform:scale(.93);}
-.fin-avatar-svg{
+.fin-avatar-wrap:active .fin-avatar-sprite{transform:translateY(2px);}
+.fin-avatar-sprite{
   width:100%;height:100%;
   display:block;
-  filter:drop-shadow(0 8px 16px rgba(0,0,0,.35));
+  object-fit:contain;
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.3));
   transition:transform .12s ease;
-}
-.fin-body{fill:var(--accent);}
-.fin-belly{fill:var(--surface);opacity:.9;}
-.fin-eye{fill:#111;}
-.fin-pupil{fill:#111;}
-.fin-mouth{stroke:#111;stroke-width:2.4;fill:none;stroke-linecap:round;}
-.fin-cheek{fill:#ff8fa3;opacity:.55;}
-.fin-brow{stroke:#111;stroke-width:2.2;fill:none;stroke-linecap:round;}
-
-/* idle: gentle bob + occasional blink handled via CSS animation on body */
-.fin-state-idle .fin-avatar-svg{animation:fin-bob 2.6s ease-in-out infinite;}
-@keyframes fin-bob{
-  0%,100%{transform:translateY(0) rotate(0deg);}
-  50%{transform:translateY(-4px) rotate(-1.5deg);}
+  -webkit-user-drag:none;
+  user-select:none;
+  pointer-events:none; /* clicks/drag are handled by fin-avatar-wrap, not the image itself */
 }
 
-/* talking: quick mouth/body pulse */
-.fin-state-talking .fin-avatar-svg{animation:fin-talk .32s ease-in-out infinite;}
-@keyframes fin-talk{
-  0%,100%{transform:scaleY(1);}
-  50%{transform:scaleY(.96) scaleX(1.02);}
-}
-
-/* happy: little hop + sparkle */
-.fin-state-happy .fin-avatar-svg{animation:fin-hop .5s ease-in-out 2;}
-@keyframes fin-hop{
-  0%,100%{transform:translateY(0) scale(1);}
-  35%{transform:translateY(-10px) scale(1.05,.95);}
-  55%{transform:translateY(0) scale(.97,1.04);}
-}
+/* The state itself now comes from which sprite frames are cycling
+   (see pet.js SpriteFX) rather than a CSS transform, so there's no
+   fin-bob/fin-talk/fin-hop/etc. here fighting the frame animation —
+   just the overlay effects (sparkle, think-dots, zzz) layered on top. */
 .fin-sparkle{
   position:absolute;inset:0;pointer-events:none;
   opacity:0;
@@ -155,47 +135,30 @@
   100%{opacity:0;transform:scale(1.3);}
 }
 
-/* thinking: tilt + dots */
-.fin-state-thinking .fin-avatar-svg{animation:fin-tilt 1.6s ease-in-out infinite;}
-@keyframes fin-tilt{
-  0%,100%{transform:rotate(0deg);}
-  50%{transform:rotate(6deg);}
-}
+/* thinking: dots overlay (the tilt itself now lives in the Thinking frames) */
 .fin-think-dots{
   position:absolute;top:-6px;right:-2px;
   display:none;gap:2px;
 }
 .fin-state-thinking .fin-think-dots{display:flex;}
 .fin-think-dots span{
-  width:4px;height:4px;border-radius:50%;
+  width:5px;height:5px;border-radius:0;
   background:var(--muted);
-  animation:fin-dot-bounce 1s ease-in-out infinite;
+  animation:fin-dot-bounce 1s steps(2,end) infinite;
 }
 .fin-think-dots span:nth-child(2){animation-delay:.15s;}
 .fin-think-dots span:nth-child(3){animation-delay:.3s;}
 @keyframes fin-dot-bounce{0%,80%,100%{transform:translateY(0);opacity:.4;}40%{transform:translateY(-4px);opacity:1;}}
 
-/* concerned: shake + furrowed brow (brow drawn conditionally in JS) */
-.fin-state-concerned .fin-avatar-svg{animation:fin-shake .4s ease-in-out;}
-@keyframes fin-shake{
-  0%,100%{transform:translateX(0);}
-  20%{transform:translateX(-3px);}
-  40%{transform:translateX(3px);}
-  60%{transform:translateX(-2px);}
-  80%{transform:translateX(2px);}
-}
+/* concerned now plays the Sad frame set (see MOOD_TO_ANIM in pet.js) */
 
-/* sleeping: dim + slow breathing + Zzz */
-.fin-state-sleeping .fin-avatar-svg{animation:fin-breathe 3.4s ease-in-out infinite;opacity:.72;}
-@keyframes fin-breathe{
-  0%,100%{transform:scale(1);}
-  50%{transform:scale(1.035);}
-}
+/* sleeping: slight dim + Zzz overlay; breathing comes from the Sleepy frames */
+.fin-state-sleeping .fin-avatar-sprite{opacity:.78;}
 .fin-zzz{
   position:absolute;top:-14px;right:-6px;
   font-size:13px;font-weight:700;color:var(--muted);
   display:none;
-  animation:fin-zzz-float 2.4s ease-in-out infinite;
+  animation:fin-zzz-float 2.4s steps(6,end) infinite;
 }
 .fin-state-sleeping .fin-zzz{display:block;}
 @keyframes fin-zzz-float{
@@ -208,11 +171,11 @@
    A slow, quiet visual cue — not a toast, not a number — that only
    changes when the trailing average actually moves. Deliberately subtle:
    a soft glow shift on the avatar, nothing that reads as a "score". */
-#fin-pet-root.fin-trend-good .fin-avatar-svg{
-  filter:drop-shadow(0 8px 16px rgba(0,0,0,.35)) drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 55%, transparent));
+#fin-pet-root.fin-trend-good .fin-avatar-sprite{
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.3)) drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 55%, transparent));
 }
-#fin-pet-root.fin-trend-tight .fin-body{
-  filter:saturate(.82);
+#fin-pet-root.fin-trend-tight .fin-avatar-sprite{
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.3)) saturate(.82);
 }
 
 /* ---------- badge shelf (persistent milestones) ----------
@@ -275,10 +238,17 @@
   line-height:1;
   display:flex;align-items:center;justify-content:center;
   cursor:pointer;
-  opacity:0;
+  /* Always at least faintly visible — a hover-only reveal (opacity:0 by
+     default) can never be discovered or tapped on a touch device, which
+     is the primary use case for a PWA like this one. */
+  opacity:.55;
   transition:opacity .15s;
 }
-.fin-avatar-wrap:hover .fin-min-btn{opacity:1;}
+.fin-avatar-wrap:hover .fin-min-btn,
+.fin-min-btn:focus-visible{opacity:1;}
+@media(hover:none){
+  .fin-min-btn{opacity:.7;}
+}
 
 /* ---------- responsive ---------- */
 @media(max-width:900px){
@@ -286,17 +256,133 @@
     right:12px;
     bottom:calc(72px + max(8px, env(safe-area-inset-bottom)));
   }
-  #fin-pet-root{--fin-avatar-size:48px;}
-  .fin-avatar-wrap{width:48px;height:48px;}
+  #fin-pet-root{--fin-avatar-size:clamp(78px, min(24vw, 15vh), 112px);}
   .fin-bubble{max-width:min(72vw,230px);font-size:12px;}
 }
 @media(max-width:380px){
   .fin-bubble{max-width:64vw;padding:10px 12px;}
-  #fin-pet-root{--fin-avatar-size:44px;}
-  .fin-avatar-wrap{width:44px;height:44px;}
 }
 
-/* respect reduced-motion preference */
+/* respect reduced-motion preference (pet.js also stops cycling frames
+   and blinking when this is set — this covers the overlay elements) */
 @media(prefers-reduced-motion:reduce){
-  .fin-avatar-svg,.fin-sparkle,.fin-think-dots span,.fin-zzz{animation:none !important;}
+  .fin-sparkle,.fin-think-dots span,.fin-zzz{animation:none !important;}
+}
+/* ============================================================
+   Fin as a pixel-art coin with a graduation cap
+   The art is drawn as crisp 32x32 pixel maps by buildSprite() in
+   pet.js (inline SVG, no image files). Each mood is a data-anim
+   value on the <svg>; pet.js (SpriteFX) just sets that attribute.
+   Motion is deliberately stepped (steps(1)) and moves in whole art
+   pixels, like a 2-4 frame virtual-pet sprite, never a smooth tween.
+   All translate values below are in ART pixels (1px = 1 sprite pixel).
+   ============================================================ */
+.finc{overflow:visible;shape-rendering:crispEdges;}
+.finc .v{display:none;}
+.finc .finc-spin{transform-box:view-box;transform-origin:16px 21px;}
+.finc .finc-cheek{opacity:.75;}
+.finc .finc-glint{opacity:0;animation:finc-glint 5s steps(1,end) infinite;}
+.finc .finc-tassel{animation:finc-swing 1.2s steps(1,end) infinite;}
+
+/* ---- which face parts show for each state ---- */
+.finc[data-anim="idle"] .eyes-open,.finc[data-anim="walking"] .eyes-open,.finc[data-anim="wave"] .eyes-open,
+.finc[data-anim="talking"] .eyes-open,.finc[data-anim="sad"] .eyes-open,.finc[data-anim="thinking"] .eyes-open{display:inline;}
+.finc[data-anim="blink"] .eyes-blink{display:inline;}
+.finc[data-anim="surprised"] .eyes-wide{display:inline;}
+.finc[data-anim="happy"] .eyes-happy{display:inline;}
+.finc[data-anim="sleepy"] .eyes-sleep{display:inline;}
+.finc[data-anim="idle"] .mouth-smile,.finc[data-anim="blink"] .mouth-smile,
+.finc[data-anim="walking"] .mouth-smile,.finc[data-anim="wave"] .mouth-smile{display:inline;}
+.finc[data-anim="talking"] .mouth-talk,.finc[data-anim="talking"] .mouth-shut{display:inline;}
+.finc[data-anim="happy"] .mouth-happy{display:inline;}
+.finc[data-anim="sad"] .mouth-sad{display:inline;}
+.finc[data-anim="surprised"] .mouth-o{display:inline;}
+.finc[data-anim="sleepy"] .mouth-z{display:inline;}
+.finc[data-anim="thinking"] .mouth-think{display:inline;}
+.finc[data-anim="sad"] .brows-worry{display:inline;}
+.finc[data-anim="surprised"] .brows-up,.finc[data-anim="wave"] .brows-up{display:inline;}
+.finc[data-anim="thinking"] .brows-think{display:inline;}
+.finc[data-anim="sad"] .tear{display:inline;}
+.finc[data-anim="happy"] .sparks{display:inline;}
+
+/* ---- pose tweaks (whole art pixels) ---- */
+.finc[data-anim="thinking"] .eyes-open{transform:translate(1px,-1px);}
+.finc[data-anim="sad"] .eyes-open{transform:translateY(1px);}
+.finc[data-anim="happy"] .finc-cheek{opacity:1;}
+.finc[data-anim="sad"] .finc-cheek{opacity:0;}
+.finc[data-anim="happy"] .finc-hat{transform:translateY(-1px);}
+.finc[data-anim="surprised"] .finc-hat{transform:translateY(-2px);}
+.finc[data-anim="sad"] .finc-hat{transform:translateY(1px);}
+.finc[data-anim="sleepy"] .finc-hat{transform:translate(-1px,1px);}
+.finc[data-anim="thinking"] .finc-hat{transform:translateX(1px);}
+.finc[data-anim="happy"] .finc-hand-l{transform:translate(-1px,-4px);}
+.finc[data-anim="happy"] .finc-hand-r{transform:translate(1px,-4px);}
+.finc[data-anim="surprised"] .finc-hand-l{transform:translate(-1px,-3px);}
+.finc[data-anim="surprised"] .finc-hand-r{transform:translate(1px,-3px);}
+.finc[data-anim="sad"] .finc-hand{transform:translateY(2px);}
+.finc[data-anim="sleepy"] .finc-hand{transform:translateY(1px);}
+.finc[data-anim="wave"] .finc-hand-r{animation:finc-wave .4s steps(1,end) infinite;}
+.finc[data-anim="happy"] .finc-tassel,.finc[data-anim="walking"] .finc-tassel{animation-duration:.4s;}
+.finc[data-anim="sleepy"] .finc-tassel{animation-duration:3.6s;}
+
+/* ---- body motion per state (stepped, like sprite frames) ---- */
+.finc[data-anim="idle"] .finc-body,.finc[data-anim="blink"] .finc-body{animation:finc-float 1.6s steps(1,end) infinite;}
+.finc[data-anim="talking"] .finc-body{animation:finc-float .5s steps(1,end) infinite;}
+.finc[data-anim="happy"] .finc-body{animation:finc-hop .9s steps(1,end) 1;}
+.finc[data-anim="happy"] .finc-spin{animation:finc-flip .9s steps(1,end) 1;}
+.finc[data-anim="sad"] .finc-body{animation:finc-droop 1.4s steps(1,end) forwards;}
+.finc[data-anim="sleepy"] .finc-body{animation:finc-breathe 3.2s steps(1,end) infinite;}
+.finc[data-anim="surprised"] .finc-body{animation:finc-pop .7s steps(1,end) 1;}
+.finc[data-anim="thinking"] .finc-body{animation:finc-think 2.4s steps(1,end) infinite;}
+.finc[data-anim="walking"] .finc-body{animation:finc-walk .5s steps(1,end) infinite;}
+.finc[data-anim="wave"] .finc-body{animation:finc-sway 1s steps(1,end) infinite;}
+.finc[data-anim="talking"] .mouth-talk{animation:finc-mouth-open .5s steps(1,end) infinite;}
+.finc[data-anim="talking"] .mouth-shut{animation:finc-mouth-shut .5s steps(1,end) infinite;}
+.finc[data-anim="sad"] .tear{animation:finc-tear 1.6s steps(1,end) infinite;}
+.finc .sparks .spark{animation:finc-spark .9s steps(1,end) infinite;}
+.finc .sparks .spark:nth-child(2){animation-delay:.25s;}
+.finc .sparks .spark:nth-child(3){animation-delay:.5s;}
+
+@keyframes finc-float{0%{transform:translateY(0);}50%{transform:translateY(-1px);}100%{transform:translateY(0);}}
+@keyframes finc-hop{0%{transform:translateY(0);}12%{transform:translateY(-3px);}25%{transform:translateY(-5px);}38%{transform:translateY(-3px);}50%{transform:translateY(0);}62%{transform:translateY(-2px);}75%{transform:translateY(0);}100%{transform:translateY(0);}}
+@keyframes finc-flip{0%{transform:scaleX(1);}18%{transform:scaleX(.5);}30%{transform:scaleX(.12);}42%{transform:scaleX(.5);}55%{transform:scaleX(1);}100%{transform:scaleX(1);}}
+@keyframes finc-droop{0%{transform:translateY(0);}25%{transform:translateY(1px);}55%{transform:translateY(2px);}100%{transform:translateY(2px);}}
+@keyframes finc-breathe{0%{transform:translate(-1px,2px);}50%{transform:translate(-1px,3px);}100%{transform:translate(-1px,2px);}}
+@keyframes finc-pop{0%{transform:translateY(0);}12%{transform:translateY(-4px);}25%{transform:translateY(-6px);}40%{transform:translateY(-3px);}55%{transform:translateY(0);}70%{transform:translateY(-1px);}85%{transform:translateY(0);}100%{transform:translateY(0);}}
+@keyframes finc-think{0%{transform:translateX(0);}50%{transform:translateX(1px);}100%{transform:translateX(0);}}
+@keyframes finc-walk{0%{transform:translateY(0);}50%{transform:translateY(-2px);}100%{transform:translateY(0);}}
+@keyframes finc-sway{0%{transform:translateX(-1px);}50%{transform:translateX(1px);}100%{transform:translateX(-1px);}}
+@keyframes finc-swing{0%{transform:translateX(0);}50%{transform:translateX(1px);}100%{transform:translateX(0);}}
+@keyframes finc-wave{0%{transform:translate(1px,-7px);}50%{transform:translate(2px,-9px);}100%{transform:translate(1px,-7px);}}
+@keyframes finc-mouth-open{0%{opacity:1;}50%{opacity:0;}100%{opacity:1;}}
+@keyframes finc-mouth-shut{0%{opacity:0;}50%{opacity:1;}100%{opacity:0;}}
+@keyframes finc-tear{0%{transform:translateY(0);opacity:0;}15%{transform:translateY(0);opacity:1;}40%{transform:translateY(1px);opacity:1;}60%{transform:translateY(2px);opacity:1;}80%{transform:translateY(3px);opacity:1;}92%{transform:translateY(3px);opacity:0;}100%{transform:translateY(0);opacity:0;}}
+@keyframes finc-spark{0%{opacity:0;}20%{opacity:1;}70%{opacity:0;}100%{opacity:0;}}
+@keyframes finc-glint{0%{opacity:0;}92%{opacity:1;}96%{opacity:0;}100%{opacity:0;}}
+
+/* with animation off, keep the talking mouth to one frame */
+@media(prefers-reduced-motion:reduce){
+  .finc .mouth-shut{display:none !important;}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .finc,.finc *{animation:none !important;}
+}
+
+/* short screens (phone held sideways, small laptop windows): keep Fin from covering the page */
+@media(max-height:480px){
+  #fin-pet-root{--fin-avatar-size:64px;}
+}
+
+/* pixel-art crispness: snap the avatar to a whole multiple of the 32px art
+   grid so every art pixel renders the same size (browsers without round()
+   just keep the clamp() sizes above) */
+@supports (width:round(down,10px,3px)){
+  #fin-pet-root{--fin-avatar-size:round(down, clamp(96px, min(9vw, 17vh), 150px), 32px);}
+  @media(max-width:900px){
+    #fin-pet-root{--fin-avatar-size:max(64px, round(down, clamp(78px, min(24vw, 15vh), 112px), 32px));}
+  }
+  @media(max-height:480px){
+    #fin-pet-root{--fin-avatar-size:64px;}
+  }
 }
