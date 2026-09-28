@@ -38,6 +38,9 @@
    picked up and parked anywhere on screen, with the spot
    remembered across sessions.
 
+   Fin is drawn as a pixel-art coin with a graduation cap (crisp SVG pixels built from
+   small sprite maps in buildSprite; no image files).
+
    Safe to remove: delete this file, virtual-pet/pet-dialogue.js,
    virtual-pet/pet.css, and their three tags in index.html.
    ============================================================ */
@@ -69,6 +72,16 @@
   var LS_BESTS = 'finPetBests';                   // {bestSavingsRatePct, longestStreakEver}
   var LS_PATTERN_LAST = 'finPetPatternInsightAt';  // ms timestamp of last pattern insight shown
   var LS_PRIVACY_SHOWN = 'finPetPrivacyShown';
+  var LS_SPIKE_WARNED = 'finPetSpikeWarned';        // {category: msTimestamp} — once-per-week-ish per category
+  var LS_GOAL_PCT_SHOWN = 'finPetGoalPctShown';     // {goalId: [25,50,75,90]} thresholds already celebrated
+  var LS_GOAL_SAVED_SNAP = 'finPetGoalSavedSnap';   // {goalId: lastKnownSavedAmount} — to diff top-ups
+  var LS_LOAN_AMOUNT_SNAP = 'finPetLoanAmountSnap'; // {loanId: lastKnownOutstandingAmount} — to diff paydowns
+
+  var SPIKE_COOLDOWN_MS = 6*24*60*60*1000; // matches the pattern-insight cadence — real observation, not chatter
+  var SPIKE_MIN_SAMPLE = 3;   // need at least this many prior expenses in a category before "usual" means anything
+  var SPIKE_RATIO = 1.75;     // at least 75% above the category's own average
+  var SPIKE_MIN_ABS = 300;    // and at least this many pesos above it, so small categories don't trip on tiny variance
+  var GOAL_PCT_THRESHOLDS = [25,50,75,90];
 
   var PATTERN_INSIGHT_COOLDOWN_MS = 6*24*60*60*1000; // don't repeat data-pattern insights more than ~weekly
 
@@ -89,8 +102,31 @@
     moodRevertTimer: null,
     sleeping: false,
     shownTips: new Set(),   // session memory so "Another tip" doesn't repeat immediately
-    shownTerms: new Set()
+    shownTerms: new Set(),
+    bubbleQueue: [],        // FIFO queue for auto-triggered messages (see queueBubble)
+    queueBusy: false,
+    sinceLastHereChecked: false,
+    tour: false             // true while the guided tour (tour.js) is running: Fin stays quiet
   };
+
+  // Toast copy that genuinely represents good financial news, used to
+  // gate the pet's happy-mood reaction. Whitelisted rather than
+  // "anything that isn't type:'error'" — several non-error toasts (a
+  // recurring expense not yet logged, a loan due soon) are cautionary,
+  // not celebratory, and shouldn't make Fin bounce with joy over them.
+  var GOOD_NEWS_PREFIXES = [
+    'Expense logged','Expense updated','Income added','Income entry updated',
+    'Loan added','Loan updated','Loan settled','wallet added','wallet renamed',
+    'wallet removed',' updated ✓','Goal added','Goal updated','🎉 Goal reached!',
+    'Added ₱','Added ','Deducted ','fully settled','Budget saved','Backup saved',
+    'CSV downloaded','Data restored','Report downloaded','FINUITY installed',
+    'Name updated','PIN updated','PIN reset','Recovery question saved',
+    'Account linked','Linked to Google','Updated with your latest data'
+  ];
+  function isGoodNewsToast(msg){
+    if(typeof msg!=='string') return false;
+    return GOOD_NEWS_PREFIXES.some(function(p){ return msg.indexOf(p)!==-1; });
+  }
 
   function $(sel,ctx){ return (ctx||document).querySelector(sel); }
 
@@ -160,7 +196,7 @@
         '<div class="fin-think-dots"><span></span><span></span><span></span></div>' +
         '<div class="fin-zzz">Zz</div>' +
         '<div class="fin-sparkle" id="fin-sparkle"></div>' +
-        buildSVG() +
+        buildSprite() +
       '</div>' +
       '<div class="fin-min-tab" id="fin-min-tab"><span class="fin-min-dot"></span><span id="fin-min-name">Fin</span></div>';
     document.body.appendChild(root);
@@ -177,14 +213,12 @@
     els.minBtn = $('#fin-min-btn',root);
     els.minTab = $('#fin-min-tab',root);
     els.minName = $('#fin-min-name',root);
-    els.mouth = $('#fin-mouth',root);
-    els.browL = $('#fin-brow-l',root);
-    els.browR = $('#fin-brow-r',root);
-    els.eyeL = $('#fin-eye-l',root);
-    els.eyeR = $('#fin-eye-r',root);
+    els.sprite = $('#fin-sprite',root);
     els.badgeShelf = $('#fin-badge-shelf',root);
 
+    SpriteFX.start();
     setMood('idle');
+    scheduleBlink();
     applyName(getSettings().name);
     renderBadgeShelf();
 
@@ -215,58 +249,309 @@
     applySavedPosition();
   }
 
-  function buildSVG(){
-    // A small round companion, easy to swap for a sprite/GIF later —
-    // just replace this function's return value with an <img> tag.
-    return (
-      '<svg class="fin-avatar-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">' +
-        '<ellipse class="fin-body" cx="50" cy="54" rx="38" ry="34"/>' +
-        '<ellipse class="fin-body" cx="50" cy="20" rx="10" ry="10"/>' +
-        '<ellipse class="fin-belly" cx="50" cy="60" rx="22" ry="18"/>' +
-        '<ellipse class="fin-cheek" cx="26" cy="58" rx="6" ry="4"/>' +
-        '<ellipse class="fin-cheek" cx="74" cy="58" rx="6" ry="4"/>' +
-        '<path class="fin-brow" id="fin-brow-l" d="" />' +
-        '<path class="fin-brow" id="fin-brow-r" d="" />' +
-        '<ellipse class="fin-eye" id="fin-eye-l" cx="38" cy="50" rx="4.4" ry="5.6"/>' +
-        '<ellipse class="fin-eye" id="fin-eye-r" cx="62" cy="50" rx="4.4" ry="5.6"/>' +
-        '<path class="fin-mouth" id="fin-mouth" d="M42 66 Q50 71 58 66" />' +
-      '</svg>'
-    );
+  function buildSprite(){
+    // Fin is a pixel-art coin wearing a graduation cap. The art lives in the
+    // small pixel maps below (32x32 grid, one character = one pixel, '.' =
+    // empty, letters index the palette P), which are turned into crisp SVG
+    // <path>s once at build time - no image files, no gradients, no blur.
+    // To retouch Fin, edit a map or a palette colour. Expressions are still
+    // just data-anim values on the <svg>; the show/hide rules and the stepped,
+    // frame-by-frame motion live in pet.css (the ".finc" section).
+    var GRID = 32;
+    var P = {
+      o:'#4a2c05',                                   // coin outline
+      a:'#d99a14', b:'#f0b92c', c:'#b57a0b',         // milled rim (checker + shadow side)
+      i:'#b8780a',                                   // inner ring line
+      g:'#ffc93c', l:'#ffe27a', s:'#eaa51f', w:'#fff6c2', // face: base / light / shade / shine
+      d:'#2e1c02', m:'#8a2a18', p:'#ff8a7a', k:'#ff7f6e', // ink / mouth inside / tongue / cheek
+      t:'#7cc4ff', u:'#3b8ad6',                      // tear
+      x:'#0b1229', n:'#3a4d8c', N:'#6a83c9', z:'#1b2650', B:'#2a3a70', // cap
+      y:'#ffd84a', r:'#c98a12'                       // gold trim / tassel
+    };
+
+    function layer(){ return {}; }
+    function put(L, x, y, c){ L[y*GRID + x] = c; }
+    function art(L, x0, y0, rows){
+      rows.forEach(function(row, dy){
+        for(var dx=0; dx<row.length; dx++){
+          var ch = row.charAt(dx);
+          if(ch !== '.') put(L, x0+dx, y0+dy, ch);
+        }
+      });
+      return L;
+    }
+    // one <path> per colour, horizontal runs merged
+    function svgOf(L){
+      var byColor = {};
+      Object.keys(L).forEach(function(k){
+        k = +k;
+        (byColor[L[k]] = byColor[L[k]] || []).push(k);
+      });
+      return Object.keys(byColor).map(function(c){
+        var ks = byColor[c].sort(function(a,b){ return a-b; });
+        var d = '', i = 0;
+        while(i < ks.length){
+          var start = ks[i], n = 1;
+          while(i+n < ks.length && ks[i+n] === start+n && (start+n) % GRID !== 0) n++;
+          d += 'M'+(start % GRID)+' '+Math.floor(start / GRID)+'h'+n+'v1h-'+n+'z';
+          i += n;
+        }
+        return '<path fill="'+P[c]+'" d="'+d+'"/>';
+      }).join('');
+    }
+    function part(cls, build){
+      var L = layer(); build(L);
+      return '<g class="v '+cls+'">'+svgOf(L)+'</g>';
+    }
+
+    /* ----- coin body: a pixel circle shaded from a top-left light ----- */
+    var CX = 16, CY = 21, x, y;
+    function dist(px, py){ var dx = px+.5-CX, dy = py+.5-CY; return Math.sqrt(dx*dx + dy*dy); }
+    function inCoin(px, py){ return px>=0 && py>=0 && px<GRID && py<GRID && dist(px,py) <= 11; }
+    var coin = layer();
+    for(y=0; y<GRID; y++){
+      for(x=0; x<GRID; x++){
+        if(!inCoin(x,y)) continue;
+        var d = dist(x,y), tone = (x+.5-CX) + (y+.5-CY), c;
+        if(!inCoin(x-1,y) || !inCoin(x+1,y) || !inCoin(x,y-1) || !inCoin(x,y+1)) c = 'o';
+        else if(d > 8.4) c = tone > 5 ? 'c' : ((x+y) % 2 ? 'a' : 'b');
+        else if(d > 7.6) c = 'i';
+        else c = tone < -6 ? 'l' : tone > 7 ? 's' : 'g';
+        put(coin, x, y, c);
+      }
+    }
+    [[9,19],[9,18],[9,17],[10,16],[11,15]].forEach(function(p){ put(coin, p[0], p[1], 'w'); });
+
+    /* ----- graduation cap: band + flat board with a 1px underside ----- */
+    var band = layer();
+    for(y=9; y<=12; y++){
+      for(x=10; x<=21; x++) put(band, x, y, (x===10 || x===21 || y===12) ? 'x' : 'B');
+    }
+    var widths = [4,10,16,22,28,22,16,10,4], M = {}, T = {}, board = layer();
+    widths.forEach(function(w, r){
+      for(var i=0; i<w; i++) M[(1+r)*GRID + 16 - w/2 + i] = r;
+    });
+    Object.keys(M).forEach(function(k){
+      k = +k;
+      if(M[k] >= 4 && !((k+GRID) in M)) T[k+GRID] = 1;
+    });
+    function inBoard(k){ return (k in M) || (k in T); }
+    function isEdge(k){ return inBoard(k) && (!inBoard(k-1) || !inBoard(k+1) || !inBoard(k-GRID) || !inBoard(k+GRID)); }
+    Object.keys(M).concat(Object.keys(T)).forEach(function(k){
+      k = +k;
+      var c;
+      if(isEdge(k)) c = 'x';
+      else if(k in T) c = 'z';
+      else if(M[k] <= 4 && (isEdge(k-GRID) || isEdge(k-1))) c = 'N';
+      else c = 'n';
+      board[k] = c;
+    });
+    art(board, 15, 5, ['yy','yr']);           // button
+    art(board, 17, 5, ['yyyyyyyyyyyy']);      // cord to the corner
+    var tassel = layer();
+    art(tassel, 28, 6, ['y','y','y']);
+    art(tassel, 27, 9, ['yyy','yyr','y.r','y.r']);
+
+    /* ----- hands, sparks, glint ----- */
+    var HAND = ['.oo.','olgo','ogso','.oo.'];
+    function spark(cx, cy){
+      return '<g class="spark">'+svgOf(art(layer(), cx-1, cy-1, ['.y.','ywy','.y.']))+'</g>';
+    }
+
+    /* ----- face parts (only the ones for the current data-anim show) ----- */
+    var face =
+      part('eyes-open',  function(L){ var e=['wd','dd','dd']; art(L,11,19,e); art(L,19,19,e); }) +
+      part('eyes-blink', function(L){ art(L,11,21,['dd']); art(L,19,21,['dd']); }) +
+      part('eyes-wide',  function(L){ var e=['wdd','ddd','ddd','ddd']; art(L,11,19,e); art(L,18,19,e); }) +
+      part('eyes-happy', function(L){ var e=['.d.','d.d']; art(L,11,20,e); art(L,19,20,e); }) +
+      part('eyes-sleep', function(L){ var e=['d..d','.dd.']; art(L,10,20,e); art(L,18,20,e); }) +
+      part('brows-worry',function(L){ art(L,11,16,['.dd','d..']); art(L,18,16,['dd.','..d']); }) +
+      part('brows-up',   function(L){ art(L,11,16,['dd']); art(L,19,16,['dd']); }) +
+      part('brows-think',function(L){ art(L,11,17,['dd']); art(L,19,15,['dd.','..d']); }) +
+      part('mouth-smile',function(L){ art(L,13,24,['d....d','.dddd.']); }) +
+      part('mouth-happy',function(L){ art(L,13,24,['dddddd','dmmmmd','.dppd.','..dd..']); }) +
+      part('mouth-talk', function(L){ art(L,14,24,['.dd.','dmmd','.dd.']); }) +
+      part('mouth-shut', function(L){ art(L,14,25,['dddd']); }) +
+      part('mouth-sad',  function(L){ art(L,13,26,['.dddd.','d....d']); }) +
+      part('mouth-o',    function(L){ art(L,14,24,['.dd.','dmmd','dmmd','.dd.']); }) +
+      part('mouth-z',    function(L){ art(L,15,25,['dd']); }) +
+      part('mouth-think',function(L){ art(L,14,24,['...d','ddd.']); }) +
+      part('tear',       function(L){ art(L,10,22,['t','u']); });
+
+    var cheeks = svgOf(art(art(layer(), 9, 23, ['kk']), 21, 23, ['kk']));
+
+    return '' +
+      '<svg class="fin-avatar-sprite finc" id="fin-sprite" data-anim="idle" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">' +
+      '<g class="finc-body"><g class="finc-spin">' +
+      '<g class="finc-hand finc-hand-l">'+svgOf(art(layer(), 2, 25, HAND))+'</g>' +
+      '<g class="finc-hand finc-hand-r">'+svgOf(art(layer(), 26, 25, HAND))+'</g>' +
+      svgOf(coin) +
+      '<g class="finc-cheek">'+cheeks+'</g>' +
+      face +
+      '<g class="finc-hat">'+svgOf(band)+svgOf(board)+'<g class="finc-tassel">'+svgOf(tassel)+'</g></g>' +
+      '<g class="v sparks">'+spark(3,14)+spark(29,17)+spark(2,22)+'</g>' +
+      '<g class="finc-glint">'+svgOf(art(layer(), 21, 13, ['.w.','www','.w.']))+'</g>' +
+      '</g></g>' +
+      '</svg>';
+  }
+
+  /* ---------- expression controller ----------
+     Same public shape the rest of pet.js already uses (start,
+     setAnimation, isBlinking), but instead of cycling PNG frames it
+     just flips the data-anim attribute on the coin's <svg>. CSS does
+     the rest, so there is nothing to preload and nothing to resize. */
+  var ANIMS = {
+    idle:      { loop:true },
+    blink:     { ms:170 },
+    talking:   { loop:true },
+    happy:     { ms:1000 },
+    sad:       { ms:1500 },
+    sleepy:    { loop:true },
+    surprised: { ms:950 },
+    thinking:  { loop:true },
+    walking:   { loop:true },
+    wave:      { ms:1300 }
+  };
+  // Fin only ever had these six moods; map each onto the closest
+  // expression rather than inventing new trigger points.
+  var MOOD_TO_ANIM = {
+    idle:      'idle',
+    talking:   'talking',
+    happy:     'happy',
+    thinking:  'thinking',
+    concerned: 'sad',
+    sleeping:  'sleepy',
+    surprised: 'surprised',
+    waving:    'wave'
+  };
+  var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var SpriteFX = (function(){
+    var current = null;
+    var timer = null;
+
+    function setAnimation(name, onComplete){
+      if(!ANIMS[name]) name = 'idle';
+      clearTimeout(timer);
+      current = name;
+      var a = ANIMS[name];
+      var svg = els.sprite;
+      if(svg){
+        // Re-triggering a one-shot (happy twice in a row, say) needs the
+        // attribute removed first, otherwise CSS won't restart the motion.
+        if(!a.loop && svg.getAttribute('data-anim')===name){
+          svg.removeAttribute('data-anim');
+          svg.getBoundingClientRect();
+        }
+        svg.setAttribute('data-anim', name);
+      }
+      if(!a.loop && a.ms){
+        timer = setTimeout(function(){
+          if(current===name && onComplete) onComplete();
+        }, a.ms);
+      }
+    }
+
+    function start(){ if(!current) setAnimation('idle'); }
+
+    return { start:start, setAnimation:setAnimation, get current(){ return current; },
+      isBlinking:function(){ return current==='blink'; } };
+  })();
+
+  // Blink is layered on top of idle only — it never interrupts talking,
+  // thinking, happy, sad or sleepy, and it's on its own timer so it
+  // doesn't add a second loop fighting the main one. Each trigger plays
+  // two short blinks back-to-back (a natural double-blink) instead of one -
+  // a single ~440ms flash reads as barely-there, especially since it's
+  // easy to miss entirely; two in a row with a small gap between them is
+  // what actually registers as "the pet blinked."
+  var BLINK_REPEATS = 2;
+  var BLINK_GAP_MS = 150;
+  var blinkTimer = null;
+  function playBlink(timesLeft, onDone){
+    SpriteFX.setAnimation('blink', function(){
+      timesLeft--;
+      if(timesLeft>0 && pet.mood==='idle' && !pet.sleeping){
+        setTimeout(function(){ playBlink(timesLeft, onDone); }, BLINK_GAP_MS);
+      } else if(onDone){
+        onDone();
+      }
+    });
+  }
+  function scheduleBlink(){
+    clearTimeout(blinkTimer);
+    if(reducedMotion) return;
+    var delay = 3000 + Math.random()*4000;
+    blinkTimer = setTimeout(function(){
+      if(pet.mood==='idle' && !pet.sleeping){
+        playBlink(BLINK_REPEATS, function(){
+          if(pet.mood==='idle') SpriteFX.setAnimation('idle');
+        });
+      }
+      scheduleBlink();
+    }, delay);
   }
 
   /* ---------- mood / expression ---------- */
-  var MOUTHS = {
-    idle:      'M42 66 Q50 71 58 66',
-    talking:   'M42 66 Q50 71 58 66',
-    happy:     'M40 64 Q50 76 60 64',
-    thinking:  'M43 68 Q50 68 57 68',
-    concerned: 'M42 70 Q50 64 58 70',
-    sleeping:  'M44 67 Q50 69 56 67'
-  };
-  var BROWS = {
-    concerned: { l:'M32 40 Q38 44 44 41', r:'M56 41 Q62 44 68 40' },
-    thinking:  { l:'M32 41 Q38 39 44 41', r:'M56 41 Q62 39 68 41' }
-  };
-
+  var MOOD_DEFER_RETRY_MS = 70;
   function setMood(mood, autoRevertMs){
+    // If a blink is mid-flash, applying the new mood right now would swap
+    // SpriteFX's current animation out from under it - the blink cuts off
+    // after a frame or two and jumps straight into the new mood's frames,
+    // which reads as "it blinked then instantly switched to another
+    // emotion." A blink is short (well under half a second per flash), so
+    // a brief wait here is unnoticeable and lets it finish naturally first.
+    if(SpriteFX.isBlinking()){
+      setTimeout(function(){ setMood(mood, autoRevertMs); }, MOOD_DEFER_RETRY_MS);
+      return;
+    }
     clearTimeout(pet.moodRevertTimer);
     pet.mood = mood;
     els.root.className = els.root.className.replace(/\bfin-state-\S+/g,'').trim();
     els.root.classList.add('fin-state-'+mood);
-    if(els.mouth) els.mouth.setAttribute('d', MOUTHS[mood]||MOUTHS.idle);
-    var brow = BROWS[mood];
-    if(els.browL) els.browL.setAttribute('d', brow ? brow.l : '');
-    if(els.browR) els.browR.setAttribute('d', brow ? brow.r : '');
-    if(els.eyeL && els.eyeR){
-      if(mood==='sleeping'){
-        els.eyeL.setAttribute('ry','1'); els.eyeR.setAttribute('ry','1');
-      } else {
-        els.eyeL.setAttribute('ry','5.6'); els.eyeR.setAttribute('ry','5.6');
-      }
-    }
+    var anim = MOOD_TO_ANIM[mood] || 'idle';
+    SpriteFX.setAnimation(anim, function(){
+      // non-looping reactions (happy/sad) settle back to idle on their own
+      // once played through, same as the old CSS "play twice then stop" did
+      if(pet.mood===mood) setMood('idle');
+    });
     if(autoRevertMs){
       pet.moodRevertTimer = setTimeout(function(){ setMood('idle'); }, autoRevertMs);
     }
+  }
+
+  /* ---------- optional: walking / greeting API ----------
+     Not currently called from anywhere in Fin's own logic (Fin doesn't
+     walk around today), but wired up in case you want to hook it to
+     something later — e.g. pet.walkTo(200) or FinPet.wave(). */
+  var walkRAF = null;
+  function stopWalking(){
+    if(walkRAF) cancelAnimationFrame(walkRAF);
+    walkRAF = null;
+    if(pet.mood==='idle') SpriteFX.setAnimation('idle');
+  }
+  function walkTo(targetRightPx, onArrive){
+    if(!els.root) return;
+    var startRight = parseFloat(getComputedStyle(els.root).right) || 0;
+    var startTs = null;
+    var duration = Math.min(2200, Math.max(500, Math.abs(targetRightPx-startRight)*6));
+    var goingLeft = targetRightPx > startRight; // increasing "right" moves the element visually left
+    els.root.style.transform = goingLeft ? 'scaleX(1)' : 'scaleX(-1)';
+    SpriteFX.setAnimation('walking');
+    if(walkRAF) cancelAnimationFrame(walkRAF);
+    function step(ts){
+      if(startTs==null) startTs = ts;
+      var t = Math.min(1, (ts-startTs)/duration);
+      els.root.style.right = (startRight + (targetRightPx-startRight)*t) + 'px';
+      if(t<1){ walkRAF = requestAnimationFrame(step); }
+      else { stopWalking(); if(onArrive) onArrive(); }
+    }
+    walkRAF = requestAnimationFrame(step);
+  }
+  function walkLeft(distance){ walkTo((parseFloat(getComputedStyle(els.root).right)||0) + (distance||120)); }
+  function walkRight(distance){ walkTo(Math.max(0, (parseFloat(getComputedStyle(els.root).right)||0) - (distance||120))); }
+  function wave(){
+    SpriteFX.setAnimation('wave', function(){ if(pet.mood==='idle') SpriteFX.setAnimation('idle'); });
   }
 
   /* ---------- bubble ---------- */
@@ -283,6 +568,7 @@
 
   function showBubble(msg){
     if(!msg) return;
+    if(pet.tour) return; // the guided tour owns Fin's voice while it runs
     clearTimeout(pet.bubbleHideTimer);
     if(els.root.classList.contains('fin-minimized')){
       // Still register that something happened; don't force it open on
@@ -290,6 +576,7 @@
       return;
     }
     hideInlineInput();
+    pet.reactionShowing = false;
     els.bubbleText.textContent = msg.text;
     els.bubbleActions.innerHTML = '';
 
@@ -312,14 +599,52 @@
     setMood('talking');
     setTimeout(function(){ setMood(settleMood); }, 420);
 
-    var hideAfter = actionList.length ? CFG.BUBBLE_MS_ACTION : CFG.BUBBLE_MS;
+    var hideAfter = msg.stayMs || (actionList.length ? CFG.BUBBLE_MS_ACTION : CFG.BUBBLE_MS);
     pet.bubbleHideTimer = setTimeout(hideBubble, hideAfter);
   }
 
   function hideBubble(){
     clearTimeout(pet.bubbleHideTimer);
+    pet.reactionShowing = false;
     els.bubble.classList.remove('fin-show');
     hideInlineInput();
+    releaseQueue();
+  }
+
+  // ---------- auto-message FIFO queue ----------
+  // Several independent checks (budget alerts, milestones, post-action
+  // tips, streak celebrations, weekly recap, personal bests, pattern
+  // insights, staleness nudges...) can all decide to speak up around the
+  // same time, each on its own setTimeout. Left uncoordinated, whichever
+  // timer resolves last silently overwrites whatever bubble was already
+  // showing — the person never even sees the earlier message. Routing all
+  // of them through this queue instead means they show one at a time, in
+  // the order they were requested, and nothing gets silently dropped.
+  var BUBBLE_QUEUE_MAX = 5;
+  function queueBubble(msg, delayMs){
+    if(!msg) return;
+    if(pet.bubbleQueue.length>=BUBBLE_QUEUE_MAX) return; // don't grow unbounded if a lot piles up
+    pet.bubbleQueue.push({ msg: msg, delay: delayMs||0 });
+    processQueue();
+  }
+  function processQueue(){
+    if(pet.queueBusy) return;
+    var next = pet.bubbleQueue.shift();
+    if(!next) return;
+    pet.queueBusy = true;
+    setTimeout(function(){
+      showBubble(next.msg);
+      if(els.root.classList.contains('fin-minimized') || pet.tour){
+        // showBubble no-op'd (minimized / touring) — nothing will ever call hideBubble
+        // for it, so release the queue ourselves instead of stalling on it.
+        releaseQueue();
+      }
+    }, next.delay);
+  }
+  function releaseQueue(){
+    if(!pet.queueBusy) return;
+    pet.queueBusy = false;
+    if(pet.bubbleQueue.length) setTimeout(processQueue, 350);
   }
 
   // Inline text-entry inside the bubble itself, used instead of
@@ -329,6 +654,7 @@
   function showInlineInput(promptText, placeholder, onSubmit){
     clearTimeout(pet.bubbleHideTimer);
     if(els.root.classList.contains('fin-minimized')) return;
+    pet.reactionShowing = false;
     els.bubbleText.textContent = promptText;
     els.bubbleActions.innerHTML = '';
     els.inputField.value = '';
@@ -356,6 +682,13 @@
     var dlg = window.FinPetDialogue;
     if(!action || !dlg) return;
     switch(action.kind){
+      case 'custom':
+        if(typeof action.onClick==='function') action.onClick();
+        break;
+      case 'tour':
+        if(window.FinTour && typeof window.FinTour.start==='function') window.FinTour.start(true);
+        else showBubble({ text:"The tour isn't available right now." });
+        break;
       case 'navigate':
         if(action.module && typeof window.show==='function'){
           window.show(action.module);
@@ -432,6 +765,42 @@
           setTimeout(function(){ showBubble(dlg.answerQuestion(val, enrichedCtx())); }, 260);
         });
         break;
+      case 'goal-quick-add':
+        if(typeof window.addToGoal==='function' && action.goalId!==undefined && action.amount){
+          window.addToGoal(action.goalId, action.amount);
+        }
+        break;
+      case 'loan-settle':
+        if(typeof window.openSettleLoan==='function' && action.loanId!==undefined){
+          window.openSettleLoan(action.loanId);
+        }
+        break;
+      case 'loan-partial-pay':
+        showInlineInput("How much to log toward this loan?", "e.g. 500", function(val){
+          var amt = parseFloat(val);
+          if(amt>0 && typeof window.adjustLoan==='function' && action.loanId!==undefined){
+            window.adjustLoan(action.loanId, 'deduct', amt);
+          }
+        });
+        break;
+      case 'log-recurring':
+        if(typeof window.logRecurring==='function' && action.templateId!==undefined){
+          window.logRecurring(action.templateId);
+        }
+        break;
+      case 'carry-over-budget':
+        if(typeof window.setBudgetLimit==='function' && action.amount!==undefined){
+          window.setBudgetLimit(action.amount);
+        }
+        break;
+      case 'settings-toggle-push':
+        requestNotificationPermission().then(function(perm){
+          var s = getSettings();
+          s.pushEnabled = (perm==='granted');
+          saveSettings(s);
+          showBubble(dlg.getSettingsNotificationsMessage(s));
+        });
+        break;
       case 'dismiss':
       default:
         break;
@@ -463,6 +832,8 @@
     if(pet.suppressClick){ pet.suppressClick = false; return; }
     resetIdle();
     if(pet.sleeping){ wake(); return; }
+    // Tap the pet again while a bubble is open to close it (tap = open/close toggle).
+    if(els.bubble.classList.contains('fin-show')){ hideBubble(); return; }
     showBubble(window.FinPetDialogue.getMenuMessage(safeCtx(), getSettings().tone));
   }
 
@@ -629,7 +1000,7 @@
       if(newKind==='savings') awardBadge('best-saver');
       markShown('milestone');
       var msg = window.FinPetDialogue.getNewBestCelebration(newKind, newValue);
-      if(msg) setTimeout(function(){ showBubble(msg); }, 1000);
+      if(msg) queueBubble(msg, 1000);
     }
   }
 
@@ -646,7 +1017,7 @@
     if(!msg) return;
     try{ localStorage.setItem(LS_PATTERN_LAST, String(Date.now())); }catch(e){}
     markShown('milestone');
-    setTimeout(function(){ showBubble(msg); }, 1200);
+    queueBubble(msg, 1200);
   }
 
   /* ---------- visual trend cue ----------
@@ -678,6 +1049,7 @@
   function onModuleEnter(moduleId){
     resetIdle();
     pet.lastModule = moduleId;
+    if(pet.tour) return; // the guided tour is navigating; don't burn first-run tips or queue chatter
     var ctx = safeCtx();
 
     // First-run walkthrough takes priority over the regular per-module
@@ -700,6 +1072,13 @@
     if(moduleId==='dashboard'){
       applyTrendClass(ctx);
       checkPersonalBests(ctx);
+      checkPaceWarning(ctx);
+      checkSurplusSuggestion(ctx);
+      checkIncomeStale(ctx);
+      checkBudgetStale(ctx);
+      checkWalletStale(ctx);
+      checkMonthCarryover(ctx);
+      checkSinceLastHere();
     }
 
     // A new week deserves an unprompted recap instead of making the
@@ -713,6 +1092,7 @@
 
     if(moduleId==='dashboard') checkPatternInsight();
     if(moduleId==='goals') checkStaleGoals();
+    if(moduleId==='loans') checkIdleLoans();
   }
 
   /* ---------- milestones & streaks (read off the app's own toasts) ---------- */
@@ -740,19 +1120,7 @@
     if(ctx.streakDays===7) awardBadge('streak-7');
     if(ctx.streakDays===30) awardBadge('streak-30');
     markShown('milestone');
-    setTimeout(function(){ showBubble(msg); }, 1400);
-  }
-
-  function checkMilestoneToast(toastMsg){
-    if(!canShowAuto('milestone')) return;
-    var msg = window.FinPetDialogue.getMilestoneMessage(toastMsg);
-    if(!msg) return;
-    if(typeof toastMsg==='string'){
-      if(toastMsg.indexOf('🎉 Goal reached!')===0) awardBadge('goal-hit');
-      if(toastMsg.indexOf('Loan settled')===0 || toastMsg.indexOf('fully settled')!==-1) awardBadge('loan-free');
-    }
-    markShown('milestone');
-    setTimeout(function(){ showBubble(msg); }, 900);
+    queueBubble(msg, 1400);
   }
 
   function getPostActionShown(){
@@ -771,16 +1139,17 @@
   // "Here's a sensible next step" after a specific, first-time-ish action —
   // each one only ever shown once (tracked by dialogue.js's msg.key), so it
   // reads as a helpful nudge rather than nagging on every repeat action.
-  function checkPostAction(toastMsg){
+  // Driven by the app's own custom events (eventName + detail) instead of
+  // matching substrings of the toast copy — see wireFinEvents().
+  function checkPostAction(eventName, detail){
     if(!canShowAuto('milestone')) return;
     var ctx = safeCtx();
-    if(toastMsg==='Budget saved ✓') awardBadge('first-month-budgeted');
-    var msg = window.FinPetDialogue.getPostActionMessage(toastMsg, ctx);
+    var msg = window.FinPetDialogue.getPostActionMessage(eventName, detail, ctx);
     if(!msg) return;
     if(msg.key && getPostActionShown().indexOf(msg.key)!==-1) return;
     if(msg.key) markPostActionShown(msg.key);
     markShown('milestone');
-    setTimeout(function(){ showBubble(msg); }, 900);
+    queueBubble(msg, 900);
   }
 
   /* ---------- real-time budget alerts ----------
@@ -798,8 +1167,7 @@
     var d = new Date();
     return d.getFullYear()+'-'+(d.getMonth()+1);
   }
-  function checkBudgetAlert(toastMsg){
-    if(typeof toastMsg!=='string' || toastMsg.indexOf('Expense logged')!==0) return;
+  function checkBudgetAlert(){
     if(getSettings().muteBudget) return;
     var ctx = safeCtx();
     if(ctx.budgetPct===null) return;
@@ -818,7 +1186,7 @@
     saveBudgetAlertState(st);
 
     markShown('milestone');
-    setTimeout(function(){ showBubble(window.FinPetDialogue.getBudgetAlertMessage(ctx, level)); }, 700);
+    queueBubble(window.FinPetDialogue.getBudgetAlertMessage(ctx, level), 700);
   }
 
   /* ---------- weekly recap ---------- */
@@ -841,7 +1209,10 @@
     var msg = window.FinPetDialogue.getWeeklyRecapMessage(ctx);
     if(!msg) return false;
     markShown('dashboard');
-    showBubble(msg);
+    // Routed through the same queue as personal-bests/milestones/etc. so a
+    // record set on this same visit can't silently stomp the recap (or
+    // vice versa) the way two independent setTimeouts used to.
+    queueBubble(msg, 0);
     return true;
   }
 
@@ -904,7 +1275,381 @@
     if(!msg) return;
     markGoalNudged(candidate.id);
     markShown('milestone');
-    showBubble(msg);
+    queueBubble(msg, 0);
+  }
+
+  /* ---------- loan-progress tracking + idle-loan nudges (item 20) ----------
+     Loans carry no "last touched" timestamp of their own, so pet.js tracks
+     one itself, the same way it already does for goals — updated whenever
+     fin:loan-added / fin:loan-adjusted / fin:loan-settled fires. */
+  var LS_LOAN_PROGRESS = 'finPetLoanProgress';
+  var LS_LOAN_IDLE_WARNED = 'finPetLoanIdleWarned';
+  var LOAN_IDLE_DAYS = 90;
+  function getLoanProgressMap(){
+    try{ return JSON.parse(localStorage.getItem(LS_LOAN_PROGRESS)||'{}'); }catch(e){ return {}; }
+  }
+  function recordLoanProgress(id){
+    if(id===undefined || id===null) return;
+    try{
+      var map = getLoanProgressMap();
+      map[id] = Date.now();
+      localStorage.setItem(LS_LOAN_PROGRESS, JSON.stringify(map));
+    }catch(e){}
+  }
+  function getLoanIdleWarnedMap(){
+    try{ return JSON.parse(localStorage.getItem(LS_LOAN_IDLE_WARNED)||'{}'); }catch(e){ return {}; }
+  }
+  function checkIdleLoans(){
+    if(getSettings().muteInsights) return;
+    if(!canShowAuto('milestone')) return;
+    var loans = (getAppState().loans||[]).filter(function(l){ return l && !l.settled && !l.due; });
+    if(!loans.length) return;
+    var map = getLoanProgressMap();
+    var warned = getLoanIdleWarnedMap();
+    var now = Date.now();
+    var candidate = null, longestGap = -1;
+    loans.forEach(function(l){
+      var last = map[l.id];
+      if(last===undefined){
+        // Never tracked before (loan predates this feature, or was added
+        // before this session) — start tracking from now rather than
+        // assuming it's already been sitting idle.
+        recordLoanProgress(l.id);
+        return;
+      }
+      var ageMs = now-last;
+      if(ageMs < LOAN_IDLE_DAYS*86400000) return;
+      var lastWarn = warned[l.id]||0;
+      if(now-lastWarn < GOAL_RENUDGE_MS) return;
+      if(ageMs>longestGap){ longestGap=ageMs; candidate=l; }
+    });
+    if(!candidate) return;
+    warned[candidate.id] = now;
+    try{ localStorage.setItem(LS_LOAN_IDLE_WARNED, JSON.stringify(warned)); }catch(e){}
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getLoanIdleMessage(candidate, Math.floor(longestGap/86400000)), 0);
+  }
+
+  /* ---------- proactive nudges (pace, surplus, staleness, since-last-here) ----------
+     A cluster of once-per-period checks, each gated by its own localStorage
+     marker so it fires at most once per relevant window (a month, a visit)
+     rather than nagging on every dashboard visit. */
+
+  function checkPaceWarning(ctx){
+    if(getSettings().muteBudget) return;
+    if(!ctx.budgetLimit || ctx.projectedPct===null || ctx.projectedPct===undefined) return;
+    if(ctx.budgetPct!==null && ctx.budgetPct>=75) return; // the real 75%/100% alert already covers this
+    if(!ctx.daysInMonth) return;
+    var timeFrac = ctx.dayOfMonth/ctx.daysInMonth;
+    var spendFrac = (ctx.budgetPct||0)/100;
+    if(spendFrac - timeFrac < 0.2) return; // not meaningfully ahead of pace
+    var monthKey = currentMonthKey();
+    var LS_PACE_WARNED = 'finPetPaceWarned';
+    if(localStorage.getItem(LS_PACE_WARNED)===monthKey) return;
+    try{ localStorage.setItem(LS_PACE_WARNED, monthKey); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getPaceWarningMessage(ctx, Math.round(timeFrac*100)), 600);
+  }
+
+  function checkSurplusSuggestion(ctx){
+    if(getSettings().muteInsights) return;
+    if(!ctx.budgetLimit || !ctx.curIncome) return;
+    var surplus = ctx.curIncome - ctx.budgetLimit - ctx.curExp;
+    if(surplus < 500) return;
+    var goals = (getAppState().goals||[]).filter(function(g){ return g && g.target>0 && g.saved<g.target; });
+    if(!goals.length) return;
+    var monthKey = currentMonthKey();
+    var LS_SURPLUS = 'finPetSurplusSuggested';
+    var last = null;
+    try{ last = JSON.parse(localStorage.getItem(LS_SURPLUS)||'null'); }catch(e){}
+    if(last && last.month===monthKey) return;
+    try{ localStorage.setItem(LS_SURPLUS, JSON.stringify({month:monthKey})); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getSurplusSuggestionMessage(goals[0], surplus), 800);
+  }
+
+  function checkIncomeStale(ctx){
+    if(getSettings().muteInsights) return;
+    if(!ctx.incomeStale) return;
+    var monthKey = currentMonthKey();
+    var LS_INCOME_STALE = 'finPetIncomeStaleWarned';
+    if(localStorage.getItem(LS_INCOME_STALE)===monthKey) return;
+    try{ localStorage.setItem(LS_INCOME_STALE, monthKey); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getIncomeStaleMessage(ctx), 500);
+  }
+
+  // Tracks when the current budget figure was last (re)saved, so
+  // checkBudgetStale can tell "never revisited" apart from "just set it".
+  var LS_BUDGET_SET_AT = 'finPetBudgetSetAt';
+  function recordBudgetSet(amount){
+    if(!amount) return;
+    try{ localStorage.setItem(LS_BUDGET_SET_AT, JSON.stringify({amount:amount, setAt:Date.now()})); }catch(e){}
+  }
+  function getBudgetSetRecord(){
+    try{ return JSON.parse(localStorage.getItem(LS_BUDGET_SET_AT)||'null'); }catch(e){ return null; }
+  }
+  function checkBudgetStale(ctx){
+    if(getSettings().muteInsights) return;
+    if(!ctx.budgetLimit || !ctx.curExp) return;
+    var rec = getBudgetSetRecord();
+    if(!rec || rec.amount!==ctx.budgetLimit) return; // never tracked, or changed since — nothing stale to flag yet
+    var monthsSince = (Date.now()-rec.setAt) / (30*86400000);
+    if(monthsSince<3) return;
+    var diffPct = Math.abs(ctx.curExp-ctx.budgetLimit)/ctx.budgetLimit;
+    if(diffPct<0.25) return;
+    var monthKey = currentMonthKey();
+    var LS_BUDGET_STALE_WARNED = 'finPetBudgetStaleWarned';
+    if(localStorage.getItem(LS_BUDGET_STALE_WARNED)===monthKey) return;
+    try{ localStorage.setItem(LS_BUDGET_STALE_WARNED, monthKey); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getBudgetStaleMessage(ctx, diffPct), 500);
+  }
+
+  function checkWalletStale(ctx){
+    if(getSettings().muteInsights) return;
+    if(!ctx.staleWallet) return;
+    var key = String(ctx.staleWallet.wallet.id);
+    var monthKey = currentMonthKey();
+    var LS_WALLET_STALE_WARNED = 'finPetWalletStaleWarned';
+    var seen = {};
+    try{ seen = JSON.parse(localStorage.getItem(LS_WALLET_STALE_WARNED)||'{}'); }catch(e){}
+    if(seen[key]===monthKey) return;
+    seen[key] = monthKey;
+    try{ localStorage.setItem(LS_WALLET_STALE_WARNED, JSON.stringify(seen)); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getWalletStaleMessage(ctx.staleWallet), 500);
+  }
+
+  // Start-of-month "carry over last time's budget?" — the app doesn't
+  // reset the budget figure automatically between months, so this only
+  // has something to offer when the current figure is 0 but a previous
+  // nonzero figure was tracked (e.g. it was manually cleared).
+  function checkMonthCarryover(ctx){
+    if(getSettings().muteInsights) return;
+    if(ctx.dayOfMonth>3) return;
+    if(ctx.budgetLimit>0) return;
+    var rec = getBudgetSetRecord();
+    if(!rec || !rec.amount) return;
+    var monthKey = currentMonthKey();
+    var LS_CARRYOVER = 'finPetCarryoverPrompted';
+    if(localStorage.getItem(LS_CARRYOVER)===monthKey) return;
+    try{ localStorage.setItem(LS_CARRYOVER, monthKey); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getCarryoverMessage(rec.amount), 500);
+  }
+
+  // A lighter, more frequent cousin of the weekly recap — checked once per
+  // session on the first dashboard visit, comparing to the last time the
+  // app was actually opened rather than waiting for a new calendar week.
+  var LS_LAST_SEEN = 'finPetLastSeenAt';
+  function checkSinceLastHere(){
+    if(pet.sinceLastHereChecked) return;
+    pet.sinceLastHereChecked = true;
+    if(getSettings().muteInsights) return;
+    if(!localStorage.getItem(LS_ONBOARDED)) return;
+    var prev = 0;
+    try{ prev = parseInt(localStorage.getItem(LS_LAST_SEEN)||'0',10)||0; }catch(e){}
+    var now = Date.now();
+    try{ localStorage.setItem(LS_LAST_SEEN, String(now)); }catch(e){}
+    if(!prev) return; // first time we've tracked this — nothing to compare yet
+    var gapDays = Math.floor((now-prev)/86400000);
+    if(gapDays<1 || gapDays>30) return; // too soon, or too long for a "since last here" delta to still be the right format
+    var msg = safe(function(){ return window.FinPetDialogue.getSinceLastHereMessage(gapDays, safeCtx()); }, null);
+    if(!msg) return;
+    if(!canShowAuto('dashboard')) return;
+    markShown('dashboard');
+    queueBubble(msg, 400);
+  }
+
+  // Hooked into the recurring-expense-missing toast (dispatched by
+  // index.html as fin:recurring-missing with a template id per item) so
+  // it's an actionable "Log it" instead of a passive toast that's easy to
+  // miss.
+  function checkRecurringMissing(detail){
+    if(getSettings().muteTips) return;
+    var items = (detail && detail.items) || [];
+    if(!items.length) return;
+    if(!canShowAuto('milestone')) return;
+    var msg = window.FinPetDialogue.getRecurringMissingMessage(items);
+    if(!msg) return;
+    markShown('milestone');
+    queueBubble(msg, 600);
+  }
+
+  /* ---------- reactions to previously-silent real actions ----------
+     Three real, frequent things a person does in this app used to produce
+     either nothing (a partial goal top-up, a partial loan payment) or the
+     same wordless happy-bounce as everything else on the GOOD_NEWS_PREFIXES
+     list (an outsized expense). Each of these reads the app's own state
+     directly — via getAppState(), the same accessor recordGoalProgress/
+     checkStaleGoals already use — rather than assuming an event's `detail`
+     carries a field this file can't verify from here (no index.html to
+     check against). Each keeps its own small snapshot in localStorage so it
+     can diff "before" vs "after" without needing the event payload to
+     carry a delta. */
+
+  // A markedly bigger-than-usual expense in a category with enough history
+  // to have a real "usual" to compare against. Gated like the pattern
+  // insights (roughly once a week per category) so it reads as "I noticed
+  // something," not a reaction to every single entry.
+  function checkExpenseSpike(){
+    if(getSettings().muteInsights) return;
+    var expenses = getAppState().expenses || [];
+    if(!expenses.length) return;
+    var last = expenses[expenses.length-1];
+    if(!last || !last.cat || !(last.amount>0)) return;
+    var history = expenses.slice(0, -1).filter(function(e){ return e && e.cat===last.cat && e.amount>0; });
+    if(history.length < SPIKE_MIN_SAMPLE) return;
+    var avg = history.reduce(function(a,e){ return a+e.amount; }, 0) / history.length;
+    if(avg<=0) return;
+    if(last.amount/avg < SPIKE_RATIO) return;
+    if(last.amount-avg < SPIKE_MIN_ABS) return;
+    var warned = {};
+    try{ warned = JSON.parse(localStorage.getItem(LS_SPIKE_WARNED)||'{}'); }catch(e){}
+    if(Date.now() - (warned[last.cat]||0) < SPIKE_COOLDOWN_MS) return;
+    if(!canShowAuto('milestone')) return;
+    warned[last.cat] = Date.now();
+    try{ localStorage.setItem(LS_SPIKE_WARNED, JSON.stringify(warned)); }catch(e){}
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getExpenseSpikeMessage(last, avg), 500);
+  }
+
+  // Goals: react to a partial top-up crossing a new 25/50/75/90% threshold,
+  // not just the moment it's fully reached (fin:goal-progress with
+  // d.reached already handles that case). Needs a saved-amount snapshot
+  // since state.goals carries no history of its own.
+  function getGoalPctShownMap(){
+    try{ return JSON.parse(localStorage.getItem(LS_GOAL_PCT_SHOWN)||'{}'); }catch(e){ return {}; }
+  }
+  function getGoalSavedSnapMap(){
+    try{ return JSON.parse(localStorage.getItem(LS_GOAL_SAVED_SNAP)||'{}'); }catch(e){ return {}; }
+  }
+  function seedGoalSavedSnap(goal){
+    if(!goal || goal.id===undefined) return;
+    var snap = getGoalSavedSnapMap();
+    if(snap[goal.id]===undefined){
+      snap[goal.id] = goal.saved||0;
+      try{ localStorage.setItem(LS_GOAL_SAVED_SNAP, JSON.stringify(snap)); }catch(e){}
+    }
+  }
+  function checkGoalProgressPct(goal){
+    if(!goal || !(goal.target>0) || goal.id===undefined) return;
+    if(getSettings().muteInsights) return;
+    var snap = getGoalSavedSnapMap();
+    var prevSaved = snap[goal.id];
+    snap[goal.id] = goal.saved;
+    try{ localStorage.setItem(LS_GOAL_SAVED_SNAP, JSON.stringify(snap)); }catch(e){}
+    if(prevSaved===undefined) return; // first time tracking this goal — nothing to diff against yet
+    var added = goal.saved - prevSaved;
+    if(!(added>0)) return;
+    var pct = Math.round((goal.saved/goal.target)*100);
+    var shownMap = getGoalPctShownMap();
+    var shown = shownMap[goal.id] || [];
+    var crossed = GOAL_PCT_THRESHOLDS.filter(function(t){ return pct>=t && shown.indexOf(t)===-1; });
+    if(!crossed.length) return;
+    var level = crossed[crossed.length-1];
+    shownMap[goal.id] = shown.concat(crossed);
+    try{ localStorage.setItem(LS_GOAL_PCT_SHOWN, JSON.stringify(shownMap)); }catch(e){}
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getGoalProgressMessage(goal, added, level), 900);
+  }
+
+  // Loans: react to a partial payment (not settled — that's its own event)
+  // with the actual amount just paid down. Same snapshot approach as goals,
+  // since state.loans carries no "amount before this change" of its own.
+  function getLoanAmountSnapMap(){
+    try{ return JSON.parse(localStorage.getItem(LS_LOAN_AMOUNT_SNAP)||'{}'); }catch(e){ return {}; }
+  }
+  function seedLoanAmountSnap(loan){
+    if(!loan || loan.id===undefined) return;
+    var snap = getLoanAmountSnapMap();
+    if(snap[loan.id]===undefined){
+      snap[loan.id] = loan.amount;
+      try{ localStorage.setItem(LS_LOAN_AMOUNT_SNAP, JSON.stringify(snap)); }catch(e){}
+    }
+  }
+  function checkLoanPaymentAmount(loan){
+    if(!loan || loan.settled || loan.id===undefined) return;
+    if(getSettings().muteInsights) return;
+    var snap = getLoanAmountSnapMap();
+    var prevAmt = snap[loan.id];
+    snap[loan.id] = loan.amount;
+    try{ localStorage.setItem(LS_LOAN_AMOUNT_SNAP, JSON.stringify(snap)); }catch(e){}
+    if(!(prevAmt>0)) return; // no baseline yet, or it was already at/below zero
+    var paid = prevAmt - loan.amount;
+    if(!(paid>0) || !(loan.amount>0)) return; // paid down to exactly zero is fin:loan-settled's job, not this one
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getLoanPaymentMessage(loan, paid), 900);
+  }
+
+  /* ---------- streak-at-risk evening nudge + Notification API (item 13, 16) ----------
+     Best-effort only: without a push server, a Notification can only be
+     shown while this tab's process is still alive somewhere (open but
+     backgrounded) — not after the browser/app has actually been closed.
+     True "reaches you even when FINUITY isn't open" delivery needs a
+     server-side Push API integration, which is out of scope without a
+     backend. This still covers the common case (tab open, phone locked or
+     on another app) better than doing nothing. */
+  function notificationsEnabled(){
+    return !!(getSettings().pushEnabled && ('Notification' in window) && Notification.permission==='granted');
+  }
+  function requestNotificationPermission(){
+    if(!('Notification' in window)) return Promise.resolve('unsupported');
+    if(Notification.permission==='granted') return Promise.resolve('granted');
+    if(Notification.permission==='denied') return Promise.resolve('denied');
+    return Notification.requestPermission();
+  }
+  function notifyIfHidden(title, body, tag){
+    if(!notificationsEnabled()) return;
+    if(document.visibilityState==='visible') return; // the bubble already covers the foreground case
+    if(!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready.then(function(reg){
+      reg.showNotification(title, { body: body, tag: tag, icon: 'icon-192.png', badge: 'icon-192.png' });
+    }).catch(function(){});
+  }
+
+  var LS_STREAK_RISK = 'finPetStreakRiskWarned';
+  function checkStreakRisk(ctx){
+    if(getSettings().muteInsights) return;
+    if(ctx.timeOfDay!=='evening') return;
+    if(ctx.loggedExpenseToday || ctx.streakDays<3) return;
+    var todayKey = safe(function(){ return window.today(); }, new Date().toDateString());
+    if(localStorage.getItem(LS_STREAK_RISK)===todayKey) return;
+    try{ localStorage.setItem(LS_STREAK_RISK, todayKey); }catch(e){}
+    notifyIfHidden("Don't break the streak", "Your "+ctx.streakDays+"-day logging streak is still alive — log today's expenses before it resets.", 'streak-risk');
+    if(!canShowAuto('milestone')) return;
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getStreakRiskMessage(ctx), 500);
+  }
+
+  var LS_LOAN_NOTIFIED = 'finPetLoanNotified';
+  function checkLoanDueSoonNotify(ctx){
+    if(!ctx.dueSoonLoan || ctx.dueSoonLoan.daysUntil>1) return;
+    var key = ctx.dueSoonLoan.id+'|'+ctx.dueSoonLoan.due;
+    var seen = [];
+    try{ seen = JSON.parse(localStorage.getItem(LS_LOAN_NOTIFIED)||'[]'); }catch(e){}
+    if(seen.indexOf(key)!==-1) return;
+    seen.push(key);
+    try{ localStorage.setItem(LS_LOAN_NOTIFIED, JSON.stringify(seen.slice(-30))); }catch(e){}
+    notifyIfHidden('Loan due soon', '"'+ctx.dueSoonLoan.name+'" is due '+(ctx.dueSoonLoan.daysUntil<=0?'today':'tomorrow')+'.', 'loan-due');
+  }
+
+  // Runs the checks that need to fire even if the person never leaves the
+  // dashboard open — evening streak risk and a next-day loan due date —
+  // on a light interval plus whenever the tab becomes visible again.
+  function runPeriodicChecks(){
+    var ctx = safeCtx();
+    checkStreakRisk(ctx);
+    checkLoanDueSoonNotify(ctx);
   }
 
   /* ---------- idle / sleep ---------- */
@@ -980,10 +1725,8 @@
   function maybeShowPrivacyNotice(){
     if(localStorage.getItem(LS_PRIVACY_SHOWN)==='1') return;
     try{ localStorage.setItem(LS_PRIVACY_SHOWN,'1'); }catch(e){}
-    setTimeout(function(){
-      markShown('milestone');
-      showBubble(window.FinPetDialogue.getPrivacyMessage());
-    }, 1800);
+    markShown('milestone');
+    queueBubble(window.FinPetDialogue.getPrivacyMessage(), 1800);
   }
   function safe(fn, fallback){ try{ return fn(); }catch(e){ return fallback; } }
 
@@ -1006,22 +1749,17 @@
         try{
           if(type==='error'){
             setMood('concerned', 1600);
+            reactToToast(msg, type);
             return;
           }
-          if(Date.now()-pet.lastAutoAt > CFG.MIN_GAP_MS){
+          // Whitelist-gated, not "anything that isn't an error" — see
+          // GOOD_NEWS_PREFIXES above. A few non-error toasts (a recurring
+          // expense not yet logged, a loan due soon) are cautionary, not
+          // something to bounce happily about.
+          if(isGoodNewsToast(msg) && Date.now()-pet.lastAutoAt > CFG.MIN_GAP_MS){
             setMood('happy', 1400);
           }
-          // A goal-reached / loan-settled toast is a real, app-confirmed
-          // event — worth a small celebration rather than staying silent.
-          checkMilestoneToast(msg);
-          // A handful of specific first-time actions get a one-time
-          // "here's what makes sense next" nudge.
-          checkPostAction(msg);
-          // Real-time budget-threshold check, right as the expense lands.
-          checkBudgetAlert(msg);
-          if(typeof msg==='string' && msg.indexOf('logged')!==-1){
-            checkStreakMilestone();
-          }
+          reactToToast(msg, type);
         }catch(e){}
       };
       wrapped2.__finWrapped = true;
@@ -1062,12 +1800,258 @@
       wrapped5.__finWrapped = true;
       window.addGoal = wrapped5;
     }
+
+    wireFinEvents();
+    wireReactions();
+  }
+
+  // Listens for the custom events index.html dispatches from the handful
+  // of places that matter (see the fin:* CustomEvent calls there) instead
+  // of parsing toast copy for substrings — a toast string can be reworded
+  // freely now without silently breaking any of this.
+  function wireFinEvents(){
+    if(window.__finEventsWired) return;
+    window.__finEventsWired = true;
+
+    window.addEventListener('fin:expense-logged', function(){
+      try{
+        checkBudgetAlert();
+        checkPaceWarning(safeCtx());
+        checkStreakMilestone();
+        checkExpenseSpike();
+      }catch(e){}
+    });
+    window.addEventListener('fin:income-added', function(e){
+      try{ checkPostAction('fin:income-added', e.detail); }catch(err){}
+    });
+    window.addEventListener('fin:wallet-added', function(e){
+      try{ checkPostAction('fin:wallet-added', e.detail); }catch(err){}
+    });
+    window.addEventListener('fin:goal-added', function(e){
+      try{
+        var d = e.detail||{};
+        checkPostAction('fin:goal-added', d);
+        // Seed the saved-amount snapshot at creation (almost always 0) so
+        // the first real top-up has a baseline to diff against instead of
+        // silently being treated as "first time seeing this goal."
+        if(d.goal) seedGoalSavedSnap(d.goal);
+      }catch(err){}
+    });
+    window.addEventListener('fin:goal-progress', function(e){
+      try{
+        var d = e.detail||{};
+        if(d.reached){
+          awardBadge('goal-hit');
+          if(canShowAuto('milestone')){
+            markShown('milestone');
+            queueBubble(window.FinPetDialogue.getGoalReachedMessage(d.goal), 900);
+          }
+        } else if(d.goal){
+          checkGoalProgressPct(d.goal);
+        }
+      }catch(err){}
+    });
+    window.addEventListener('fin:loan-added', function(e){
+      try{
+        var d = e.detail||{};
+        if(d.loan){ recordLoanProgress(d.loan.id); seedLoanAmountSnap(d.loan); }
+        checkPostAction('fin:loan-added', d);
+      }catch(err){}
+    });
+    window.addEventListener('fin:loan-adjusted', function(e){
+      try{
+        var d = e.detail||{};
+        if(d.loan){ recordLoanProgress(d.loan.id); checkLoanPaymentAmount(d.loan); }
+      }catch(err){}
+    });
+    window.addEventListener('fin:loan-settled', function(e){
+      try{
+        var d = e.detail||{};
+        awardBadge('loan-free');
+        if(d.loan) recordLoanProgress(d.loan.id);
+        if(canShowAuto('milestone')){
+          markShown('milestone');
+          // A loan paid down to exactly zero via the deduct flow reads
+          // slightly differently ("fully paid off") than one settled
+          // through the modal ("settled") — detail.wallet is only present
+          // on the modal path, which is the cue used to pick the phrasing.
+          queueBubble(window.FinPetDialogue.getLoanSettledMessage(d.loan, !d.wallet), 900);
+        }
+      }catch(err){}
+    });
+    window.addEventListener('fin:budget-saved', function(e){
+      try{
+        var d = e.detail||{};
+        if(d.amount) awardBadge('first-month-budgeted');
+        recordBudgetSet(d.amount);
+        checkPostAction('fin:budget-saved', d);
+      }catch(err){}
+    });
+    window.addEventListener('fin:recurring-missing', function(e){
+      try{ checkRecurringMissing(e.detail); }catch(err){}
+    });
   }
 
   function runFirstAppearance(){
     // The very first bubble is just the dashboard's onboarding step —
     // onModuleEnter handles showing it and tracking that it's been shown.
     onModuleEnter('dashboard');
+  }
+
+  /* ---------- reactions to every action ----------
+     The pet reacts to what the person actually does, from three sources:
+       1. the app's own fin:* events (they carry real details: amount,
+          category, wallet, goal, loan...),
+       2. toast() text (covers edits, removals, exports, settings, and
+          the friendly "you missed something" errors),
+       3. a few wrapped functions that have no toast or event (theme,
+          hide balances, opening an edit form, stats, filters).
+     Each reaction always plays a mood animation right away. A short
+     spoken line is added only when nothing more important is already
+     on screen or waiting in the queue, so it never talks over budget
+     alerts, celebrations or the menu. */
+  var REACT_DELAY_MS = 900;       // lets richer messages (alerts, goals...) queue up first
+  var REACT_ERR_DELAY_MS = 150;   // input mistakes deserve a fast nudge
+  var REACT_MIN_GAP_MS = 2200;    // don't chatter on rapid-fire actions
+  var REACT_BUBBLE_MS = 4200;     // reactions are brief
+
+  function react(kind, data){
+    try{
+      if(!els.root || els.root.classList.contains('fin-minimized') || pet.tour) return;
+      var dlg = window.FinPetDialogue;
+      if(!dlg || typeof dlg.getReaction!=='function') return;
+      var s = getSettings();
+      var isErr = kind.indexOf('err-')===0;
+      var now = Date.now();
+      // An error toast and a follow-up "opened" reaction can land together
+      // (e.g. Settle with no wallets) — let the error win.
+      if(!isErr && pet.reactErrAt && now-pet.reactErrAt<400) return;
+      var r = dlg.getReaction(kind, data||{}, safeCtx(), s.tone);
+      if(!r) return;
+      if(isErr) pet.reactErrAt = now;
+
+      resetIdle();
+      if(r.mood) setMood(r.mood, r.mood==='thinking' ? 1400 : 0);
+
+      if(!r.text) return;
+      if(s.frequency==='quiet' && !isErr) return; // "quiet" keeps the animation, drops the words
+      clearTimeout(pet.reactTimer);
+      pet.reactTimer = setTimeout(function(){
+        if(els.root.classList.contains('fin-minimized')) return;
+        if(pet.queueBusy || pet.bubbleQueue.length) return; // a richer message owns the bubble
+        if(els.bubble.classList.contains('fin-show') && !pet.reactionShowing) return; // don't stomp the menu
+        var t = Date.now();
+        if(!isErr && t-(pet.lastReactSpeakAt||0) < REACT_MIN_GAP_MS) return;
+        pet.lastReactSpeakAt = t;
+        showReactionBubble(r.text);
+      }, isErr ? REACT_ERR_DELAY_MS : REACT_DELAY_MS);
+    }catch(e){}
+  }
+
+  function showReactionBubble(text){
+    clearTimeout(pet.bubbleHideTimer);
+    hideInlineInput();
+    els.bubbleText.textContent = text;
+    els.bubbleActions.innerHTML = '';
+    els.bubble.classList.add('fin-show');
+    pet.reactionShowing = true;
+    pet.bubbleHideTimer = setTimeout(hideBubble, REACT_BUBBLE_MS);
+  }
+
+  // toast() text -> reaction. `null` kind means "an fin:* event already
+  // reacts to this one with real details, so don't double up".
+  var TOAST_RULES = [
+    // already handled by fin:* events
+    [/^Expense logged/, null], [/^Income added/, null], [/^Loan added/, null], [/wallet added ✓$/, null],
+    [/^Goal added/, null], [/^🎉 Goal reached/, null], [/added to .* ✓$/i, null], [/^Deducted /, null],
+    [/fully settled/, null], [/^Loan settled/, null], [/^Budget saved/, null], [/ logged ✓/, null],
+    [/^↺ .*recurring/, null], [/^⚠ .*overdue/, null], [/^⏰/, null],
+    // input mistakes and problems
+    [/valid amount/, 'err-amount'], [/^Add a description/, 'err-desc'], [/^Enter a (goal |wallet |new )?name/, 'err-name'],
+    [/valid balance/, 'err-balance'], [/too long/, 'err-longname'], [/already exists/, 'err-dupe'],
+    [/Cannot remove last wallet/, 'err-lastwallet'], [/Add a wallet first|Pick a wallet/, 'err-nowallet'],
+    [/no outstanding amount/, 'err-nooutstanding'], [/Pick a backup file/, 'err-nofile'],
+    [/Invalid backup file/, 'err-badfile'], [/Could not read file/, 'err-readfile'],
+    [/Cloud sync failed|Could not reach cloud/, 'err-cloud'], [/^Linking failed/, 'err-linking'],
+    [/pop-ups/, 'err-popup'], [/already logged this month/, 'err-already'],
+    // edits, removals, data, account
+    [/^Income entry updated/, 'income-edited'], [/^Expense updated/, 'expense-edited'],
+    [/^Loan updated/, 'loan-edited'], [/^Goal updated/, 'goal-edited'], [/^Goal removed/, 'goal-removed'],
+    [/^Removed$/, function(){ return 'removed-'+(pet.lastDelType||''); }],
+    [/^Wallet renamed to (.+) ✓$/, 'wallet-renamed', function(m){ return {name:m[1]}; }],
+    [/^(.+) wallet removed$/, 'wallet-removed', function(m){ return {label:m[1]}; }],
+    [/^Marked as outstanding/, 'loan-unsettled'],
+    [/^CSV downloaded/, 'csv'], [/^Backup saved/, 'backup'], [/^Data restored/, 'restore'],
+    [/^Report downloaded/, 'report'], [/^Opening print/, 'print'],
+    [/^Name updated/, 'name-updated'], [/^PIN updated/, 'pin-updated'], [/^PIN reset/, 'pin-reset'],
+    [/^PIN removed/, 'pin-removed'], [/^Recovery question saved/, 'recovery-saved'],
+    [/^Updated with your latest data/, 'cloud-updated'], [/^Linked to Google|^Account linked/, 'google-linked'],
+    [/^FINUITY installed/, 'installed'], [/^Welcome, (.+?)!/, 'welcome', function(m){ return {name:m[1]}; }],
+    [/^All data cleared/, 'cleared'], [/^Account reset/, 'account-reset'],
+    [/^(.+) updated ✓$/, 'balance-updated', function(m){ return {label:m[1]}; }]
+  ];
+  function reactToToast(msg, type){
+    if(typeof msg!=='string') return;
+    for(var i=0;i<TOAST_RULES.length;i++){
+      var rule = TOAST_RULES[i];
+      var m = rule[0].exec(msg);
+      if(!m) continue;
+      if(rule[1]===null) return;
+      var kind = typeof rule[1]==='function' ? rule[1]() : rule[1];
+      var data = rule[2] ? rule[2](m) : {};
+      if(kind==='removed-') kind = 'removed';
+      react(kind, data);
+      return;
+    }
+    if(type==='error') react('err-generic', {});
+  }
+
+  // Wrap an app function so the pet notices it, without changing what it does.
+  function wrapAction(name, pre, post){
+    var orig = window[name];
+    if(typeof orig!=='function' || orig.__finReact) return;
+    var w = function(){
+      var args = arguments;
+      try{ if(pre) pre.apply(null, args); }catch(e){}
+      var result = orig.apply(this, args);
+      try{ if(post) post.apply(null, args); }catch(e){}
+      return result;
+    };
+    w.__finReact = true;
+    window[name] = w;
+  }
+
+  function wireReactions(){
+    if(window.__finReactionsWired) return;
+    window.__finReactionsWired = true;
+
+    // real details from the app's own events
+    var EVT = {
+      'fin:expense-logged': 'expense',
+      'fin:income-added': 'income',
+      'fin:wallet-added': 'wallet-added',
+      'fin:goal-added': 'goal-added',
+      'fin:goal-progress': 'goal-progress',
+      'fin:loan-added': 'loan-added',
+      'fin:loan-adjusted': 'loan-adjusted',
+      'fin:loan-settled': 'loan-settled',
+      'fin:budget-saved': 'budget-saved'
+    };
+    Object.keys(EVT).forEach(function(evt){
+      window.addEventListener(evt, function(e){ react(EVT[evt], (e && e.detail) || {}); });
+    });
+
+    // actions with no toast/event of their own
+    wrapAction('del', function(type){ pet.lastDelType = type; });
+    wrapAction('toggleTheme', null, function(){ react('theme', { light: document.body.classList.contains('light') }); });
+    wrapAction('toggleHideBalances', null, function(){ react('hide-balances', { hidden: !!getAppState().hideBalances }); });
+    wrapAction('openEditExpense', null, function(){ react('edit-open', { what:'an expense' }); });
+    wrapAction('openEditIncome', null, function(){ react('edit-open', { what:'an income entry' }); });
+    wrapAction('openEditLoan', null, function(){ react('edit-open', { what:'a loan' }); });
+    wrapAction('openEditGoal', null, function(){ react('edit-open', { what:'a goal' }); });
+    wrapAction('openSettleLoan', null, function(){ react('settle-open', {}); });
+    wrapAction('openStatsModal', null, function(type){ react('stats-open', { type:type }); });
+    wrapAction('setExpFilter', null, function(){ react('filter', {}); });
   }
 
   /* ---------- init ---------- */
@@ -1078,6 +2062,17 @@
     wireActivityListeners();
     resetIdle();
     setTimeout(function(){ applyTrendClass(safeCtx()); }, 300);
+
+    // Streak-risk / loan-due-tomorrow checks need to run even if the
+    // person never revisits the dashboard today — a light interval plus a
+    // check on regaining visibility covers that without any server.
+    setTimeout(runPeriodicChecks, 4000);
+    setInterval(function(){
+      if(document.visibilityState==='visible') runPeriodicChecks();
+    }, 10*60*1000);
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState==='visible') runPeriodicChecks();
+    });
   }
 
   if(document.readyState==='loading'){
@@ -1085,4 +2080,28 @@
   } else {
     init();
   }
+
+  // Not used by Fin's own logic today (Fin doesn't currently walk or
+  // wave on its own), but here so any future hook-up doesn't need to
+  // touch this file again.
+  window.FinPet = {
+    setAnimation: function(name){ SpriteFX.setAnimation(name); },
+    walkTo: walkTo,
+    walkLeft: walkLeft,
+    walkRight: walkRight,
+    stopWalking: stopWalking,
+    wave: wave,
+    // ---- used by the guided tour (virtual-pet/tour.js) ----
+    say: function(msg){
+      if(!els.root || pet.tour || els.root.classList.contains('fin-minimized')) return false;
+      showBubble(msg);
+      return true;
+    },
+    setMood: function(mood, autoRevertMs){ setMood(mood, autoRevertMs); },
+    setTourMode: function(on){
+      pet.tour = !!on;
+      if(on){ pet.bubbleQueue = []; clearTimeout(pet.reactTimer); hideBubble(); }
+      else { resetIdle(); setMood('idle'); }
+    }
+  };
 })();
