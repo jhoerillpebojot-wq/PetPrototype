@@ -24,6 +24,7 @@
    14. Ask Fin (local, pattern-matched Q&A, no network)
    15. on-device / privacy line
    16. badges (persistent milestone shelf)
+   17. instant reactions to every action (getReaction)
    ============================================================ */
 (function(global){
 
@@ -61,11 +62,19 @@
   // typeof so this file never throws if loaded standalone) resolves
   // correctly. This one fix is what makes every context-driven message in
   // this file — old and new — actually see the user's real data.
+  
   function appState(){
     return safe(()=> (typeof state!=='undefined' ? state : null), null) || {};
   }
   function appCatLabels(){
     return safe(()=> (typeof CAT_LABELS!=='undefined' ? CAT_LABELS : null), null);
+  }
+  // Same lexical-scope trick as appState() above, for the `cloudUser`
+  // variable index.html declares with `let`. Used to make the privacy
+  // message accurate for signed-in users, whose data does sync to the
+  // cloud (see getPrivacyMessage below).
+  function isSyncing(){
+    return !!safe(()=> (typeof cloudUser!=='undefined' && cloudUser && !cloudUser.isAnonymous), false);
   }
 
   var FALLBACK_CAT_LABELS = {
@@ -213,6 +222,33 @@
 
     const negativeWallets = wallets.filter(w=>w.balance<0);
 
+    // Wallet that's had no income/expense activity in a long stretch (a
+    // reconciliation check, not just a negative-balance one) — wallets
+    // already carry an `updated` timestamp from balance changes, so this
+    // needs no extra tracking of its own.
+    const WALLET_STALE_DAYS = 45;
+    let staleWallet = null;
+    if(todayStr && wallets.length){
+      const lastActivity = {};
+      wallets.forEach(w=>{ lastActivity[w.id] = w.updated || null; });
+      expenses.forEach(e=>{ if(e.source && (!lastActivity[e.source] || e.date>lastActivity[e.source])) lastActivity[e.source]=e.date; });
+      income.forEach(i=>{ if(i.wallet && i.dateAdded && (!lastActivity[i.wallet] || i.dateAdded>lastActivity[i.wallet])) lastActivity[i.wallet]=i.dateAdded; });
+      let oldestGap = -1;
+      wallets.forEach(w=>{
+        const last = lastActivity[w.id];
+        const gapDays = last ? daysBetween(last, todayStr) : null;
+        const effectiveGap = gapDays===null ? WALLET_STALE_DAYS : gapDays; // never-touched wallet counts as stale
+        if(effectiveGap>=WALLET_STALE_DAYS && effectiveGap>oldestGap){ oldestGap=effectiveGap; staleWallet = { wallet:w, days: gapDays }; }
+      });
+    }
+
+    // Monthly income silently sitting at 0 even though it's been logged
+    // before — a few days into the month is enough to tell "hasn't gotten
+    // to it yet" apart from a real gap that's quietly corrupting the
+    // savings rate, trend cue, and pace projection.
+    const incomeStale = income.length>0 && now.getDate()>=4 &&
+      income.filter(i=>i.month===curMonthName && i.year===curYear).reduce((a,b)=>a+b.amount,0)===0;
+
     const nearGoal = goals.find(g=>g.target>0 && g.saved<g.target && (g.saved/g.target)>=0.9);
 
     const streakDays = safe(()=>computeStreak(expenses, todayStr), 0);
@@ -251,6 +287,8 @@
       dayOfMonth, daysInMonth, projectedSpend, projectedPct, projectedOverBudget,
       hasNegativeWallet: negativeWallets.length>0,
       negativeWallet: negativeWallets[0]||null,
+      staleWallet,
+      incomeStale,
       nearGoal,
       hasWallets: wallets.length>0,
       hasIncome: income.length>0,
@@ -282,7 +320,12 @@
 
     if(ctx.overdueCount>0){
       const l = ctx.overdueLoan;
-      return { text:`${greetWord}${name}! Heads up — "${l.name}" looks past its due date.`, actionText:'View Loans', actionModule:'loans' };
+      return { text:`${greetWord}${name}! Heads up — "${l.name}" looks past its due date.`, mood:'concerned',
+        actions:[
+          { label:'Mark Settled', kind:'loan-settle', loanId:l.id },
+          { label:'Log Partial Payment', kind:'loan-partial-pay', loanId:l.id },
+          { label:'View Loans', kind:'navigate', module:'loans' }
+        ] };
     }
     if(ctx.overBudget){
       return { text:`${greetWord}${name}. You're over your budget for this month.`, actionText:'Check Budget', actionModule:'goals' };
@@ -290,7 +333,12 @@
     if(ctx.dueSoonCount>0){
       const l = ctx.dueSoonLoan;
       const when = l.daysUntil<=0 ? 'today' : l.daysUntil===1 ? 'tomorrow' : `in ${l.daysUntil} days`;
-      return { text:`${greetWord}${name}. "${l.name}" is due ${when} — worth settling before it's overdue.`, actionText:'View Loans', actionModule:'loans' };
+      return { text:`${greetWord}${name}. "${l.name}" is due ${when} — worth settling before it's overdue.`,
+        actions:[
+          { label:'Mark Settled', kind:'loan-settle', loanId:l.id },
+          { label:'Log Partial Payment', kind:'loan-partial-pay', loanId:l.id },
+          { label:'View Loans', kind:'navigate', module:'loans' }
+        ] };
     }
     if(!ctx.loggedExpenseToday && ctx.hasExpenses){
       return { text:`${greetWord}${name}! Haven't seen an expense logged today yet.`, actionText:'Add Expense', actionModule:'expenses', actionFocus:'exp-desc' };
@@ -299,7 +347,12 @@
       return { text:`${greetWord}${name}. You're at ${ctx.budgetPct}% of this month's budget — worth a glance.`, actionText:'View Budget', actionModule:'goals' };
     }
     if(ctx.nearGoal){
-      return { text:`${greetWord}${name}! "${ctx.nearGoal.name}" is almost fully funded.`, actionText:'View Goal', actionModule:'goals' };
+      const remaining = Math.max(0, Math.round((ctx.nearGoal.target-ctx.nearGoal.saved)*100)/100);
+      return { text:`${greetWord}${name}! "${ctx.nearGoal.name}" is almost fully funded — ${fmtSafe(remaining)} left.`,
+        actions:[
+          { label:'Add '+fmtSafe(remaining)+' now', kind:'goal-quick-add', goalId:ctx.nearGoal.id, amount:remaining },
+          { label:'View Goal', kind:'navigate', module:'goals' }
+        ] };
     }
     if(ctx.payableCount>0){
       return { text:`${greetWord}${name}. You still owe on ${ctx.payableCount} loan${ctx.payableCount>1?'s':''}.`, actionText:'View Loans', actionModule:'loans' };
@@ -343,12 +396,20 @@
   function loansMessage(ctx){
     if(ctx.overdueCount>0){
       const l = ctx.overdueLoan;
-      return { text:`"${l.name}" is past its due date. Worth following up.`, mood:'concerned' };
+      return { text:`"${l.name}" is past its due date. Worth following up.`, mood:'concerned',
+        actions:[
+          { label:'Mark Settled', kind:'loan-settle', loanId:l.id },
+          { label:'Log Partial Payment', kind:'loan-partial-pay', loanId:l.id }
+        ] };
     }
     if(ctx.dueSoonCount>0){
       const l = ctx.dueSoonLoan;
       const when = l.daysUntil<=0 ? 'today' : l.daysUntil===1 ? 'tomorrow' : `in ${l.daysUntil} days`;
-      return { text:`"${l.name}" is due ${when} — might be worth settling before it's overdue.` };
+      return { text:`"${l.name}" is due ${when} — might be worth settling before it's overdue.`,
+        actions:[
+          { label:'Mark Settled', kind:'loan-settle', loanId:l.id },
+          { label:'Log Partial Payment', kind:'loan-partial-pay', loanId:l.id }
+        ] };
     }
     if(ctx.payableCount>0){
       return { text:`You have ${ctx.payableCount} loan${ctx.payableCount>1?'s':''} still outstanding.` };
@@ -367,7 +428,9 @@
       return { text:`You're over budget by ${ctx.budgetPct-100}% this month.`, mood:'concerned' };
     }
     if(ctx.nearGoal){
-      return { text:`"${ctx.nearGoal.name}" is at ${Math.round(ctx.nearGoal.saved/ctx.nearGoal.target*100)}% — so close!`, mood:'happy' };
+      const remaining = Math.max(0, Math.round((ctx.nearGoal.target-ctx.nearGoal.saved)*100)/100);
+      return { text:`"${ctx.nearGoal.name}" is at ${Math.round(ctx.nearGoal.saved/ctx.nearGoal.target*100)}% — so close!`, mood:'happy',
+        actions:[ { label:'Add '+fmtSafe(remaining)+' now', kind:'goal-quick-add', goalId:ctx.nearGoal.id, amount:remaining } ] };
     }
     if(!ctx.budgetLimit){
       return { text:"You haven't set a monthly budget yet. It's a quick way to keep spending in check." };
@@ -439,6 +502,7 @@
       text: toneSet(tone).menu,
       actions: [
         { label:'🧭 What\'s next?', kind:'next' },
+        { label:'🗺️ Show me around', kind:'tour' },
         { label:'💡 Quick tip', kind:'tip' },
         { label:'📊 Check-in', kind:'health' },
         { label:'📖 Explain a term', kind:'glossary' },
@@ -513,7 +577,29 @@
     };
   }
 
+  // Half the time (when there's something real to point to), the idle
+  // timer surfaces an actual fact from ctx instead of a canned line — this
+  // is the trigger people notice most since it's unprompted, so it's the
+  // one most worth tying to real state rather than a random pick.
   function getIdleNudge(ctx, tone){
+    ctx = ctx || {};
+    const real = [];
+    if(ctx.streakDays>=2 && !ctx.loggedExpenseToday){
+      real.push(`Still got that ${ctx.streakDays}-day streak going — nothing logged yet today, though.`);
+    }
+    if(ctx.budgetLimit>0 && ctx.budgetPct!==null && ctx.budgetPct<75){
+      real.push(`${100-ctx.budgetPct}% of this month's budget still unused, if that's useful to know.`);
+    }
+    if(ctx.dueSoonLoan){
+      const l = ctx.dueSoonLoan;
+      const when = l.daysUntil<=0 ? 'today' : l.daysUntil===1 ? 'tomorrow' : `in ${l.daysUntil} days`;
+      real.push(`Quiet reminder: "${l.name}" is due ${when}.`);
+    }
+    if(ctx.nearGoal && ctx.nearGoal.target>0){
+      const pct = Math.round((ctx.nearGoal.saved/ctx.nearGoal.target)*100);
+      real.push(`"${ctx.nearGoal.name}" is ${pct}% of the way there — close now.`);
+    }
+    if(real.length && Math.random()<0.5) return { text: pick(real) };
     return { text: pick(toneSet(tone).idle) };
   }
 
@@ -674,50 +760,52 @@
 
   /* ---------- 7. milestones & streaks ---------- */
 
-  // Reads the exact text the host app already passes to toast() — never
-  // invents an outcome, only reacts to ones the app itself reported.
-  function getMilestoneMessage(toastText){
-    if(typeof toastText !== 'string') return null;
-    if(toastText.indexOf('🎉 Goal reached!')===0){
-      const name = toastText.slice('🎉 Goal reached!'.length).trim();
-      return { text: `You just hit your goal${name?' — "'+name+'"':''}! That's worth celebrating. 🎉`, mood:'happy' };
+  // Fires off the app's own custom events (dispatched from the handful of
+  // places in index.html that matter — see fin:goal-progress/fin:loan-settled)
+  // rather than parsing the toast copy shown to the user. A copy edit to a
+  // toast string can no longer silently break these.
+  function getGoalReachedMessage(goal){
+    const name = goal && goal.name;
+    const label = name ? `"${name}"` : 'your goal';
+    const amtText = goal && goal.target>0 ? ` — ${fmtSafe(goal.target)} saved in full` : '';
+    return { text: `You just hit ${label}${amtText}! That's worth celebrating. 🎉`, mood:'happy' };
+  }
+  function getLoanSettledMessage(loan, wasPaidToZero){
+    // loan.amount is the outstanding balance, which is usually already 0 by
+    // the time this event fires — only mention it when it's genuinely
+    // still populated (some settle paths pass the pre-zeroed object).
+    const amtText = loan && loan.amount>0 ? ` (${fmtSafe(loan.amount)})` : '';
+    const name = loan && loan.name ? `"${loan.name}"` : 'that loan';
+    if(wasPaidToZero){
+      return { text:`${name}${amtText} is fully paid off now. Nice work chipping away at it.`, mood:'happy' };
     }
-    if(toastText.indexOf('Loan settled')===0){
-      return { text:"One less thing hanging over you — that loan's settled.", mood:'happy' };
-    }
-    if(toastText.indexOf('fully settled')!==-1){
-      return { text:"That loan's fully paid off now. Nice work chipping away at it.", mood:'happy' };
-    }
-    return null;
+    return { text:`One less thing hanging over you — ${name}${amtText} is settled.`, mood:'happy' };
   }
 
   // Reacts to a handful of specific, first-time or otherwise notable
-  // actions with a concrete "here's a sensible next step" — same
-  // toast-text-reading approach as getMilestoneMessage, nothing invented.
-  // Each returns a `key` so pet.js can show one-time tips only once ever.
-  function getPostActionMessage(toastText, ctx){
-    if(typeof toastText !== 'string') return null;
-
-    if(toastText.indexOf('wallet added')!==-1 && ctx.counts.wallets===1){
+  // actions with a concrete "here's a sensible next step" — driven by the
+  // same app-dispatched event name + detail as the functions above, not by
+  // matching substrings of the toast copy. Each returns a `key` so pet.js
+  // can show one-time tips only once ever.
+  function getPostActionMessage(eventName, detail, ctx){
+    detail = detail || {};
+    if(eventName==='fin:wallet-added' && ctx.counts.wallets===1){
       return { key:'wallet-first', text:"First wallet's in. Add some income next so the balance actually reflects something.",
         actions:[ { label:'Add Income', kind:'navigate', module:'income', focus:'inc-amount' }, { label:'Later', kind:'dismiss' } ] };
     }
-    if(toastText.indexOf('Income added')===0 && ctx.counts.income===1){
+    if(eventName==='fin:income-added' && ctx.counts.income===1){
       return { key:'income-first', text:"Income's logged. Whenever you spend something, log it as an expense to keep the full picture.",
         actions:[ { label:'Add Expense', kind:'navigate', module:'expenses', focus:'exp-desc' }, { label:'Later', kind:'dismiss' } ] };
     }
-    if(toastText==='Goal added ✓' && ctx.counts.goals===1){
+    if(eventName==='fin:goal-added' && ctx.counts.goals===1){
       return { key:'goal-first', text:"First goal's set. Add to it any time you save something extra — even small amounts count toward it.", mood:'happy' };
     }
-    if(toastText==='Budget saved ✓'){
+    if(eventName==='fin:budget-saved'){
       return { key:'budget-first', text:"Good — if spending gets close to that limit this month, I'll flag it here." };
     }
-    if(toastText.indexOf('Loan added')===0){
-      const lastLoan = safe(()=>{
-        const loans = appState().loans || [];
-        return loans[loans.length-1];
-      }, null);
-      if(lastLoan && !lastLoan.due){
+    if(eventName==='fin:loan-added'){
+      const loan = detail.loan;
+      if(loan && !loan.due){
         return { key:'loan-due-tip', text:"Tip: a loan with no due date won't get flagged if it runs overdue — worth adding one if you know it." };
       }
     }
@@ -746,14 +834,16 @@
 
   function getBudgetAlertMessage(ctx, level){
     if(level>=100){
+      const overBy = ctx.curExp - ctx.budgetLimit;
       return {
-        text:`Heads up — that pushed you to ${ctx.budgetPct}% of this month's ${fmtSafe(ctx.budgetLimit)} budget, over the limit.`,
+        text:`Heads up — that pushed you to ${ctx.budgetPct}% of this month's ${fmtSafe(ctx.budgetLimit)} budget, ${fmtSafe(overBy)} over.`,
         mood:'concerned',
         actions:[ { label:'Check Budget', kind:'navigate', module:'goals' }, { label:'Menu', kind:'menu' } ]
       };
     }
+    const leftAmt = ctx.budgetLimit - ctx.curExp;
     return {
-      text:`Just logged — that puts you at ${ctx.budgetPct}% of this month's budget.`,
+      text:`Just logged — that puts you at ${ctx.budgetPct}% of this month's budget, ${fmtSafe(leftAmt)} left.`,
       mood:'idle',
       actions:[ { label:'Check Budget', kind:'navigate', module:'goals' }, { label:'Menu', kind:'menu' } ]
     };
@@ -838,6 +928,7 @@
         { label:(settings.muteTips?'🔕':'🔔')+' Idle tips', kind:'settings-toggle-tips' },
         { label:(settings.muteBudget?'🔕':'🔔')+' Budget alerts', kind:'settings-toggle-budget' },
         { label:(settings.muteInsights?'🔕':'🔔')+' Goal & weekly insights', kind:'settings-toggle-insights' },
+        { label:(settings.pushEnabled?'🔔':'🔕')+' Notify me when the app is in the background', kind:'settings-toggle-push' },
         { label:'⬅ Back', kind:'settings' }
       ]
     };
@@ -951,9 +1042,9 @@
     const m0 = monthTopCategory(0), m1 = monthTopCategory(1), m2 = monthTopCategory(2);
     if(m0 && m1 && m2 && m0.cat===m1.cat && m1.cat===m2.cat){
       return {
-        text:`This is the third month in a row ${m0.label} has been your top category.`,
+        text:`This is the third month in a row ${m0.label} has been your top category. Worth checking your overall budget actually accounts for that.`,
         mood:'idle',
-        actions:[ { label:'View Expenses', kind:'navigate', module:'expenses' }, { label:'Menu', kind:'menu' } ]
+        actions:[ { label:'Check Budget', kind:'navigate', module:'goals' }, { label:'View Expenses', kind:'navigate', module:'expenses' }, { label:'Menu', kind:'menu' } ]
       };
     }
     // 2. Same-time-last-year spike — only worth surfacing in the first
@@ -973,9 +1064,9 @@
     const wd = weekdayConcentration();
     if(wd){
       return {
-        text:`You've logged more ${wd.catLabel} expenses on ${wd.dayName}s than any other day over the last couple months (${wd.count} of ${wd.totalInCat}).`,
+        text:`You've logged more ${wd.catLabel} expenses on ${wd.dayName}s than any other day over the last couple months (${wd.count} of ${wd.totalInCat}). Worth budgeting for on purpose rather than by surprise.`,
         mood:'idle',
-        actions:[ { label:'Menu', kind:'menu' } ]
+        actions:[ { label:'View Expenses', kind:'navigate', module:'expenses' }, { label:'Menu', kind:'menu' } ]
       };
     }
     return null;
@@ -1072,14 +1163,59 @@
       return { text: ctx.streakDays>0 ? `${ctx.streakDays}-day logging streak right now.` : "No active streak — log an expense today to start one.", actions:[{label:'Menu',kind:'menu'}] };
     }
 
-    return { text:"I'm not sure about that one yet — I can answer things like spending by category, upcoming loans, budget left, or how this month compares to last.", actions:[{label:'Menu',kind:'menu'}] };
+    // Wallet balances.
+    if(q.indexOf('wallet')!==-1 && (q.indexOf('balance')!==-1 || q.indexOf('how much')!==-1 || q.indexOf('have')!==-1)){
+      const wallets = appState().wallets||[];
+      if(!wallets.length) return { text:"No wallets set up yet.", actions:[{label:'Add Wallet',kind:'navigate',module:'balances'},{label:'Menu',kind:'menu'}] };
+      const lines = wallets.map(w=> `${w.label}: ${fmtSafe(w.balance)}`);
+      return { text: lines.join(', ')+'.', actions:[{label:'Menu',kind:'menu'}] };
+    }
+
+    // Total upcoming recurring bills.
+    if(q.indexOf('recurring')!==-1 || q.indexOf('bill')!==-1){
+      const expenses = appState().expenses||[];
+      const recurringDescs = [...new Set(expenses.filter(e=>e.recurring).map(e=>e.desc))];
+      if(!recurringDescs.length) return { text:"No recurring expenses set up yet.", actions:[{label:'Menu',kind:'menu'}] };
+      let total = 0;
+      recurringDescs.forEach(desc=>{
+        const matches = expenses.filter(e=>e.recurring && e.desc===desc);
+        if(matches.length) total += matches[matches.length-1].amount;
+      });
+      return { text: `${recurringDescs.length} recurring expense${recurringDescs.length>1?'s':''} totalling about ${fmtSafe(total)} a month.`, actions:[{label:'Menu',kind:'menu'}] };
+    }
+
+    // Income-vs-expense ratio.
+    if(q.indexOf('ratio')!==-1 || (q.indexOf('income')!==-1 && q.indexOf('expense')!==-1)){
+      if(!ctx.curIncome) return { text:"No income logged yet this month to compare against.", actions:[{label:'Menu',kind:'menu'}] };
+      const ratioPct = Math.round((ctx.curExp/ctx.curIncome)*100);
+      return { text:`You've spent about ${ratioPct}% of what you've earned this month (${fmtSafe(ctx.curExp)} of ${fmtSafe(ctx.curIncome)}).`, actions:[{label:'Menu',kind:'menu'}] };
+    }
+
+    // Projected "how much left this month" — pace-based, not just literal-to-date.
+    if(q.indexOf('left')!==-1 && q.indexOf('month')!==-1){
+      if(!ctx.curIncome) return { text:"No income logged yet this month to project against.", actions:[{label:'Menu',kind:'menu'}] };
+      const projectedLeft = ctx.curIncome - (ctx.projectedSpend!==undefined && ctx.projectedSpend!==null ? ctx.projectedSpend : ctx.curExp);
+      return { text: projectedLeft>=0
+          ? `At this pace, about ${fmtSafe(projectedLeft)} left by month-end.`
+          : `At this pace, you're projected to be ${fmtSafe(Math.abs(projectedLeft))} short by month-end.`,
+        mood: projectedLeft<0?'concerned':'idle',
+        actions:[{label:'Menu',kind:'menu'}] };
+    }
+
+    return { text:"I'm not sure about that one yet — I can answer things like spending by category, upcoming loans, budget left, wallet balances, recurring bills, or how this month compares to last.", actions:[{label:'Menu',kind:'menu'}] };
   }
 
   /* ---------- 15. on-device / privacy line ---------- */
 
   function getPrivacyMessage(){
+    if(isSyncing()){
+      return {
+        text:"I don't make any network calls myself — everything I look at (your entries, patterns, everything) comes straight from this app's own data. Since you're signed in, though, FINUITY itself does back that data up to your account so it's there on your other devices too.",
+        actions:[ { label:'Menu', kind:'menu' } ]
+      };
+    }
     return {
-      text:"Everything I look at lives on this device — your entries, patterns, everything. Nothing about your finances is sent anywhere.",
+      text:"Everything I look at lives on this device — your entries, patterns, everything. You're using FINUITY as a guest right now, so none of it leaves this device.",
       actions:[ { label:'Menu', kind:'menu' } ]
     };
   }
@@ -1109,6 +1245,331 @@
     return { text: lines.join('\n'), actions:[{label:'Menu',kind:'menu'}] };
   }
 
+  /* ---------- 17. proactive nudges ----------
+     Pace-based early warnings, a surplus-to-goal suggestion, data-freshness
+     checks, and the lighter "since you were last here" cousin of the
+     weekly recap. Any history these need (last budget-set time, last
+     visit, per-loan last-touched) is tracked and persisted by pet.js and
+     passed in as plain values — this file only formats the message. */
+
+  function getPaceWarningMessage(ctx, timePct){
+    return {
+      text:`You're ${timePct}% through the month but already at ${ctx.budgetPct}% of budget — worth watching if that pace holds.`,
+      mood:'idle',
+      actions:[ { label:'Check Budget', kind:'navigate', module:'goals' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getSurplusSuggestionMessage(goal, surplus){
+    const amt = Math.floor(surplus);
+    return {
+      text:`Income minus this month's budget leaves about ${fmtSafe(amt)} unaccounted for. Want to put some of it toward "${goal.name}"?`,
+      actions:[
+        { label:'Add '+fmtSafe(amt)+' now', kind:'goal-quick-add', goalId:goal.id, amount:amt },
+        { label:'View Goal', kind:'navigate', module:'goals' },
+        { label:'Menu', kind:'menu' }
+      ]
+    };
+  }
+
+  function getSinceLastHereMessage(days, ctx){
+    const todayStr = safe(()=>global.today(), null);
+    if(!todayStr) return null;
+    const cutoff = new Date(todayStr+'T00:00:00');
+    cutoff.setDate(cutoff.getDate()-days);
+    const cutoffStr = toLocalISO(cutoff);
+    const expenses = (appState().expenses||[]).filter(e=> e.date>cutoffStr && e.date<=todayStr);
+    if(!expenses.length){
+      return { text:`Welcome back — it's been ${days} day${days===1?'':'s'}. Nothing logged in that time.`, actions:[{label:'Menu',kind:'menu'}] };
+    }
+    const total = expenses.reduce((a,b)=>a+b.amount,0);
+    return {
+      text:`Welcome back — it's been ${days} day${days===1?'':'s'}. ${fmtSafe(total)} logged across ${expenses.length} expense${expenses.length===1?'':'s'} since then.`,
+      mood:'idle',
+      actions:[ { label:'Full check-in', kind:'health' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getStreakRiskMessage(ctx){
+    return {
+      text:`Evening check — your ${ctx.streakDays}-day logging streak is still alive, but nothing's logged today yet.`,
+      mood:'idle',
+      actions:[ { label:'Add Expense', kind:'navigate', module:'expenses', focus:'exp-desc' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getIncomeStaleMessage(ctx){
+    return {
+      text:"No income logged yet this month. If that's not right, it's quietly throwing off your savings rate and budget pace — both are treating this month as ₱0 in.",
+      mood:'concerned',
+      actions:[ { label:'Add Income', kind:'navigate', module:'income', focus:'inc-amount' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getBudgetStaleMessage(ctx, diffPct){
+    const over = ctx.curExp>ctx.budgetLimit;
+    return {
+      text:`Your budget's been ${fmtSafe(ctx.budgetLimit)} for a while now, but actual spending has been running about ${Math.round(diffPct*100)}% ${over?'over':'under'} that. Might be worth revisiting.`,
+      actions:[ { label:'Update Budget', kind:'navigate', module:'goals' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getWalletStaleMessage(staleWallet){
+    const daysText = staleWallet.days!==null ? staleWallet.days+' days' : 'a long while';
+    return {
+      text:`"${staleWallet.wallet.label}" hasn't had any income or expenses logged against it in ${daysText}. Worth checking its balance is still accurate.`,
+      actions:[ { label:'View Balances', kind:'navigate', module:'balances' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getLoanIdleMessage(loan, days){
+    return {
+      text:`"${loan.name}" (${loan.type==='payable'?'you owe':'owed to you'}) hasn't moved in ${days} days and has no due date set — easy to lose track of.`,
+      actions:[ { label:'View Loans', kind:'navigate', module:'loans' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getCarryoverMessage(amount){
+    return {
+      text:`New month, no budget set yet. Carry over last time's ${fmtSafe(amount)} limit?`,
+      actions:[
+        { label:'Carry Over '+fmtSafe(amount), kind:'carry-over-budget', amount:amount },
+        { label:'Set a New One', kind:'navigate', module:'goals' },
+        { label:'No thanks', kind:'dismiss' }
+      ]
+    };
+  }
+
+  /* ---------- 18. reactions to previously-silent real actions ----------
+     A bigger-than-usual expense, a partial top-up toward a goal, and a
+     partial loan payment all used to produce nothing more than the
+     generic good-news bounce (or, for goal top-ups and loan paydowns,
+     literally nothing at all). These give each one its own specific,
+     number-driven line. */
+
+  function getExpenseSpikeMessage(expense, avgAmount){
+    const label = catLabel(expense.cat);
+    const pctOver = avgAmount>0 ? Math.round(((expense.amount-avgAmount)/avgAmount)*100) : null;
+    const cmp = pctOver!==null ? ` — about ${pctOver}% more than you usually spend there` : '';
+    return {
+      text:`That's a bigger ${label} expense than usual (${fmtSafe(expense.amount)}${cmp}).`,
+      mood:'idle',
+      actions:[ { label:'View Expenses', kind:'navigate', module:'expenses' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getGoalProgressMessage(goal, added, pct){
+    return {
+      text:`"${goal.name}" just crossed ${pct}% of its ${fmtSafe(goal.target)} target — that last ${fmtSafe(added)} moved it forward.`,
+      mood:'idle',
+      actions:[ { label:'Add More', kind:'navigate', module:'goals' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getLoanPaymentMessage(loan, paid){
+    return {
+      text:`${fmtSafe(paid)} just went toward "${loan.name}" — ${fmtSafe(loan.amount)} left on it.`,
+      mood:'idle',
+      actions:[ { label:'View Loans', kind:'navigate', module:'loans' }, { label:'Menu', kind:'menu' } ]
+    };
+  }
+
+  function getRecurringMissingMessage(items){
+    if(!items || !items.length) return null;
+    const actions = [];
+    items.slice(0,2).forEach(it=>{
+      actions.push({ label:'Log '+it.desc+' ('+fmtSafe(it.amount)+')', kind:'log-recurring', templateId:it.templateId });
+    });
+    actions.push({ label:'View Expenses', kind:'navigate', module:'expenses' });
+    actions.push({ label:'Menu', kind:'menu' });
+    const text = items.length===1
+      ? `Looks like "${items[0].desc}" hasn't been logged yet this month.`
+      : `${items.length} recurring expenses haven't been logged yet this month.`;
+    return { text, actions };
+  }
+
+  /* ---------- 17. instant reactions to everything the person does ----------
+     Short one-liners (plus a mood) for each real action in the app. pet.js
+     calls getReaction(kind, data, ctx, tone) the moment something happens —
+     from the app's fin:* events, from toast() text, or from a wrapped
+     function — and decides whether there's room to actually speak. Lines
+     that need data return null when the data isn't there, and the next
+     candidate is tried instead. */
+  function rLine(list, d, c){
+    if(typeof list==='function') list = safe(function(){ return list(d,c); }, []) || [];
+    var arr = list.slice();
+    while(arr.length){
+      var i = Math.floor(Math.random()*arr.length);
+      var it = arr.splice(i,1)[0];
+      var out = typeof it==='function' ? safe(function(){ return it(d,c); }, null) : it;
+      if(out) return out;
+    }
+    return null;
+  }
+  function walletNameById(id){
+    var ws = appState().wallets || [];
+    for(var i=0;i<ws.length;i++){ if(ws[i] && ws[i].id===id) return ws[i].label; }
+    return null;
+  }
+  function pctOf(n,total){ return total>0 ? Math.round((n/total)*100) : null; }
+  function bigExpense(d,c){ return !d.recurring && c.budgetLimit>0 && d.amount>0 && d.amount/c.budgetLimit>=0.2; }
+  function lastWord(s){ return String(s||'').trim(); }
+
+  var REACT = {
+    /* --- logging money in/out --- */
+    'expense': {
+      mood:function(d,c){ return bigExpense(d,c) ? 'surprised' : 'happy'; },
+      fun:function(d,c){
+        if(bigExpense(d,c)) return ['Whoa — '+fmtSafe(d.amount)+' is '+pctOf(d.amount,c.budgetLimit)+"% of your whole monthly budget. Logged — let's keep an eye on the rest of the month."];
+        if(d.recurring) return ['Recurring one handled: '+lastWord(d.desc)+' ('+fmtSafe(d.amount)+'). Less to remember!'];
+        return [
+          'Logged! '+fmtSafe(d.amount)+' on '+catLabel(d.cat)+'.',
+          'Got it — "'+lastWord(d.desc)+'" for '+fmtSafe(d.amount)+'.',
+          function(){ return c.budgetPct!=null ? 'Noted! You are at '+c.budgetPct+"% of this month's budget." : null; },
+          function(){ return c.streakDays>=2 ? c.streakDays+'-day logging streak — nice consistency!' : null; },
+          'Every entry keeps the picture honest. Thanks for logging it!'
+        ];
+      },
+      biz:function(d,c){ return ['Expense recorded: '+fmtSafe(d.amount)+' ('+catLabel(d.cat)+').', c.budgetPct!=null ? 'Recorded. Budget used this month: '+c.budgetPct+'%.' : null]; }
+    },
+    'income': {
+      mood:'happy',
+      fun:function(d){ var w = walletNameById(d.walletId); return [
+        fmtSafe(d.amount)+' in! '+(w ? w+' just got heavier.' : 'Nice one!'),
+        'Income logged — '+fmtSafe(d.amount)+(w ? ' into '+w : '')+'. Love to see it!',
+        'Money in: '+fmtSafe(d.amount)+'. Remember to set some aside for your goals!' ]; },
+      biz:function(d){ return ['Income recorded: '+fmtSafe(d.amount)+'.']; }
+    },
+    'loan-added': {
+      mood:function(d){ return d.loan && d.loan.type==='receivable' ? 'happy' : 'thinking'; },
+      fun:function(d){
+        var l = d.loan || {};
+        return l.type==='receivable'
+          ? ['Noted — '+lastWord(l.name)+' owes you '+fmtSafe(l.amount)+". I'll help you keep track."]
+          : ['Logged: you owe '+lastWord(l.name)+' '+fmtSafe(l.amount)+". Let's plan to clear it!"];
+      },
+      biz:function(d){ var l = d.loan || {}; return ['Loan recorded: '+lastWord(l.name)+', '+fmtSafe(l.amount)+'.']; }
+    },
+    'loan-adjusted': {
+      mood:'happy',
+      fun:function(d){ var l = d.loan || {}; return [lastWord(l.name)+"'s loan now stands at "+fmtSafe(l.amount)+'.']; },
+      biz:function(d){ var l = d.loan || {}; return ['Loan balance updated: '+fmtSafe(l.amount)+' outstanding.']; }
+    },
+    'loan-settled': {
+      mood:'happy',
+      fun:['Loan closed out — one less thing on your mind!', 'Settled! That feels good, right?'],
+      biz:['Loan marked as settled.']
+    },
+    'wallet-added': {
+      mood:'happy',
+      fun:function(d){ return ['New wallet "'+lastWord(d.name)+'" is ready — put some money in it!', '"'+lastWord(d.name)+'" added. More places to track = clearer picture.']; },
+      biz:function(d){ return ['Wallet added: '+lastWord(d.name)+'.']; }
+    },
+    'goal-added': {
+      mood:'happy',
+      fun:function(d){ var g = d.goal || {}; return ['Goal set: '+lastWord(g.name)+' ('+fmtSafe(g.target)+"). Small top-ups add up!", 'A new goal! '+lastWord(g.name)+" — let's chip away at it."]; },
+      biz:function(d){ var g = d.goal || {}; return ['Goal created: '+lastWord(g.name)+', target '+fmtSafe(g.target)+'.']; }
+    },
+    'goal-progress': {
+      mood:'happy',
+      fun:function(d){
+        var g = d.goal || {};
+        var p = pctOf(g.saved, g.target);
+        if(d.reached) return ['You did it — '+lastWord(g.name)+' is fully funded! 🎉'];
+        return [
+          fmtSafe(d.amountAdded)+' closer to '+lastWord(g.name)+(p!=null ? ' — '+p+'% there!' : '!'),
+          'Top-up added to '+lastWord(g.name)+(p!=null ? ' ('+p+'%)' : '')+'. Keep going!'
+        ];
+      },
+      biz:function(d){ var g = d.goal || {}; var p = pctOf(g.saved, g.target); return ['Goal updated: '+lastWord(g.name)+(p!=null ? ', '+p+'% funded.' : '.')]; }
+    },
+    'budget-saved': {
+      mood:'happy',
+      fun:function(d){
+        var out = [];
+        if(d.previous>0 && d.amount<d.previous) out.push('Budget lowered to '+fmtSafe(d.amount)+' — tightening the belt. I like the ambition!');
+        else if(d.previous>0 && d.amount>d.previous) out.push('Budget raised to '+fmtSafe(d.amount)+' — a bit more breathing room.');
+        else out.push('Budget set to '+fmtSafe(d.amount)+'. Now I can watch the pace for you!');
+        return out;
+      },
+      biz:function(d){ return ['Monthly budget set to '+fmtSafe(d.amount)+'.']; }
+    },
+
+    /* --- edits, removals and other changes (detected from toasts) --- */
+    'income-edited':  { mood:'happy', fun:['Income entry updated — accurate books are happy books.', 'Fixed! Income entry saved.'], biz:['Income entry updated.'] },
+    'expense-edited': { mood:'happy', fun:['Expense updated — thanks for keeping it accurate.', 'Edit saved!'], biz:['Expense entry updated.'] },
+    'loan-edited':    { mood:'happy', fun:['Loan details updated.', 'Got the new loan details!'], biz:['Loan updated.'] },
+    'goal-edited':    { mood:'happy', fun:['Goal updated — new target, new plan!', 'Goal changes saved.'], biz:['Goal updated.'] },
+    'goal-removed':   { mood:'concerned', fun:["Goal removed. If plans change, that's okay — you can always set a new one.", 'Goal deleted.'], biz:['Goal removed.'] },
+    'removed-income':   { mood:'thinking', fun:['Income entry removed — and the wallet balance was adjusted to match.', 'Deleted. Balances are back in sync.'], biz:['Income entry removed; wallet balance adjusted.'] },
+    'removed-expenses': { mood:'thinking', fun:['Expense removed — the money went back to its wallet.', 'Deleted. Balances are back in sync.'], biz:['Expense removed; wallet balance restored.'] },
+    'removed-loans':    { mood:'thinking', fun:['Loan removed, and its wallet effects were reversed.', 'Deleted — balances adjusted to match.'], biz:['Loan removed; related balances reversed.'] },
+    'removed':          { mood:'thinking', fun:['Entry removed.'], biz:['Entry removed.'] },
+    'balance-updated':  { mood:'happy', fun:function(d){ return [lastWord(d.label)+" balance updated — now it matches reality!"]; }, biz:function(d){ return [lastWord(d.label)+' balance updated.']; } },
+    'wallet-renamed':   { mood:'happy', fun:function(d){ return ['Renamed to "'+lastWord(d.name)+'". Fresh label!']; }, biz:function(d){ return ['Wallet renamed to '+lastWord(d.name)+'.']; } },
+    'wallet-removed':   { mood:'concerned', fun:function(d){ return [lastWord(d.label)+' wallet removed. Hope you moved the money first!']; }, biz:function(d){ return [lastWord(d.label)+' wallet removed.']; } },
+    'loan-unsettled':   { mood:'thinking', fun:['Back to outstanding — I will keep it on my radar.'], biz:['Loan marked outstanding.'] },
+
+    /* --- data, account and settings --- */
+    'csv':       { mood:'happy', fun:['CSV on its way to your downloads!', 'Exported — spreadsheet time!'], biz:['CSV exported.'] },
+    'backup':    { mood:'happy', fun:['Backup saved — smart move. Keep that file somewhere safe!', 'Backed up! Future you says thanks.'], biz:['Backup saved.'] },
+    'restore':   { mood:'surprised', fun:['Data restored! Everything is back where it was.', 'Restore complete — welcome back, numbers!'], biz:['Data restored from backup.'] },
+    'report':    { mood:'happy', fun:['Monthly report downloaded — nice for a look back!', 'Report ready!'], biz:['Report downloaded.'] },
+    'print':     { mood:'thinking', fun:['Opening the print preview…'], biz:['Opening print preview.'] },
+    'name-updated':   { mood:'waving', fun:['Nice to (re)meet you!', 'Name updated — I like it!'], biz:['Name updated.'] },
+    'pin-updated':    { mood:'happy', fun:['New PIN saved — your data is a little safer.'], biz:['PIN updated.'] },
+    'pin-reset':      { mood:'happy', fun:['PIN reset — welcome back!'], biz:['PIN reset.'] },
+    'pin-removed':    { mood:'concerned', fun:['PIN removed. Anyone with this device can open the app now — you can add one back in Settings.'], biz:['PIN removed.'] },
+    'recovery-saved': { mood:'happy', fun:['Recovery question saved — a safety net for later.'], biz:['Recovery question saved.'] },
+    'cloud-updated':  { mood:'surprised', fun:['Pulled in your latest data from another device!'], biz:['Synced latest data.'] },
+    'google-linked':  { mood:'happy', fun:['Linked! Your data now lives on a real account.'], biz:['Account linked.'] },
+    'installed':      { mood:'waving', fun:['FINUITY is installed — I live on your home screen now!'], biz:['App installed.'] },
+    'welcome':        { mood:'waving', fun:function(d){ return ['Welcome, '+lastWord(d.name)+"! I'm so glad you're here."]; }, biz:function(d){ return ['Welcome, '+lastWord(d.name)+'.']; } },
+    'cleared':        { mood:'concerned', fun:['All data cleared — a clean slate.'], biz:['All data cleared.'] },
+    'account-reset':  { mood:'concerned', fun:["Account reset. Let's set things up again."], biz:['Account reset.'] },
+    'theme':          { mood:function(d){ return d.light ? 'surprised' : 'happy'; },
+                        fun:function(d){ return d.light ? ['Ooh, bright! ☀️ Light mode on.'] : ['Dark mode — cozy and easy on the eyes 🌙']; },
+                        biz:function(d){ return [d.light ? 'Light theme enabled.' : 'Dark theme enabled.']; } },
+    'hide-balances':  { mood:'thinking', fun:function(d){ return d.hidden ? ["Balances hidden — I didn't see anything 👀"] : ['Balances are back in view.']; },
+                        biz:function(d){ return [d.hidden ? 'Balances hidden.' : 'Balances visible.']; } },
+
+    /* --- opening things (mood only or a light word) --- */
+    'edit-open':   { mood:'thinking', fun:function(d){ return ['Editing '+(d.what||'an entry')+' — take your time.']; }, biz:function(d){ return ['Editing '+(d.what||'entry')+'.']; } },
+    'settle-open': { mood:'thinking', fun:['Settling a loan — choose the wallet it goes through.'], biz:['Choose a wallet to settle this loan.'] },
+    'stats-open':  { mood:'happy', fun:['Numbers time! 📊', 'Let’s see the breakdown.'], biz:['Opening statistics.'] },
+    'filter':      { mood:'thinking', fun:null, biz:null },
+
+    /* --- gentle nudges for input mistakes and problems --- */
+    'err-amount':      { mood:'concerned', fun:['Hmm, I need an amount above zero to work with.', 'Try a number greater than zero!'], biz:['Enter an amount greater than zero.'] },
+    'err-desc':        { mood:'concerned', fun:['What was it for? Add a short description.'], biz:['A description is required.'] },
+    'err-name':        { mood:'concerned', fun:['It needs a name first!'], biz:['A name is required.'] },
+    'err-balance':     { mood:'concerned', fun:['That balance does not look right — try a number that is zero or more.'], biz:['Enter a valid balance.'] },
+    'err-longname':    { mood:'concerned', fun:['A bit long! Keep it to 24 characters.'], biz:['Name must be 24 characters or fewer.'] },
+    'err-dupe':        { mood:'concerned', fun:['You already have one with that name — try a different one.'], biz:['That name is already in use.'] },
+    'err-lastwallet':  { mood:'concerned', fun:['You need at least one wallet — add another before removing this one.'], biz:['At least one wallet is required.'] },
+    'err-nowallet':    { mood:'concerned', fun:['Pick (or add) a wallet first so I know where the money goes.'], biz:['Select a wallet first.'] },
+    'err-nooutstanding': { mood:'concerned', fun:['That loan has nothing outstanding left.'], biz:['No outstanding amount on this loan.'] },
+    'err-nofile':      { mood:'concerned', fun:['Choose a backup file first.'], biz:['Select a backup file.'] },
+    'err-badfile':     { mood:'concerned', fun:["That file doesn't look like a FINUITY backup."], biz:['Invalid backup file.'] },
+    'err-readfile':    { mood:'concerned', fun:["I couldn't read that file — try another one."], biz:['File could not be read.'] },
+    'err-cloud':       { mood:'concerned', fun:['Cloud is unreachable — no worries, everything is still saved on this device.'], biz:['Cloud unavailable; data is saved locally.'] },
+    'err-linking':     { mood:'concerned', fun:["The account link didn't go through — you can try again."], biz:['Account linking failed.'] },
+    'err-popup':       { mood:'concerned', fun:['Allow pop-ups so I can open the print view.'], biz:['Allow pop-ups to print.'] },
+    'err-already':     { mood:'concerned', fun:["That one's already logged for this month."], biz:['Already logged this month.'] },
+    'err-generic':     { mood:'concerned', fun:["Oops, that didn't work. Give it another try."], biz:['That action could not be completed.'] }
+  };
+
+  function getReaction(kind, d, ctx, tone){
+    var def = REACT[kind];
+    if(!def) return null;
+    d = d || {}; ctx = ctx || {};
+    var biz = tone==='businesslike';
+    var list = (biz && def.biz) ? def.biz : def.fun;
+    var text = list ? rLine(list, d, ctx) : null;
+    var mood = typeof def.mood==='function' ? safe(function(){ return def.mood(d,ctx); }, 'happy') : def.mood;
+    return { text: text, mood: mood };
+  }
+
   global.FinPetDialogue = {
     buildContext,
     getModuleMessage,
@@ -1121,7 +1582,8 @@
     getTipMessage,
     getGlossaryMessage,
     getHealthMessage,
-    getMilestoneMessage,
+    getGoalReachedMessage,
+    getLoanSettledMessage,
     getPostActionMessage,
     getStreakCelebration,
     getBudgetAlertMessage,
@@ -1139,7 +1601,21 @@
     answerQuestion,
     getPrivacyMessage,
     getBadgesMessage,
-    BADGE_DEFS
+    BADGE_DEFS,
+    getPaceWarningMessage,
+    getSurplusSuggestionMessage,
+    getSinceLastHereMessage,
+    getStreakRiskMessage,
+    getIncomeStaleMessage,
+    getBudgetStaleMessage,
+    getWalletStaleMessage,
+    getLoanIdleMessage,
+    getCarryoverMessage,
+    getRecurringMissingMessage,
+    getExpenseSpikeMessage,
+    getGoalProgressMessage,
+    getLoanPaymentMessage,
+    getReaction
   };
 
 })(window);
