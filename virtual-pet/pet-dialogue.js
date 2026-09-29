@@ -478,10 +478,11 @@
         "Poke me anytime — I like the attention.", "All quiet on my end.",
         "I've been watching those pesos move around today.", "Bubble life is pretty cozy, not gonna lie.",
         "Nothing on fire, if that's what you're checking.", "Just vibing near your budget.",
-        "Click, click — I'm listening.", "Ask me something if you're curious about your numbers."
+        "Click, click — I'm listening.", "Ask me something if you're curious about your numbers.",
+        "Uy, unsa? Naa ra ko diri.", "Kumusta ang budget karon? 👀", "Hoy, naa ka bay pangutana? Pwede English, Tagalog, o Bisaya."
       ],
       idle: ["Psst... still there?", "Take your time — I'll be here.", "No rush. Just checking in.", "I'll just be here, looking at your wallets."],
-      wake: ["Oh, hey — welcome back!", "You're back! What'd I miss?"],
+      wake: ["Oh, hey — welcome back!", "You're back! What'd I miss?", "Nagbalik na ka! Miss tika. 😄"],
       menu: "What do you need?"
     },
     businesslike: {
@@ -1099,111 +1100,490 @@
     return null;
   }
 
-  /* ---------- 14. Ask Fin (local, pattern-matched, no network) ----------
-     A small set of questions Fin can answer instantly from state — not an
-     LLM integration, just direct lookups against the same context/state
-     this file already builds. Unmatched questions get an honest "don't
-     know that one" rather than a guess. */
+  /* ---------- 14. Ask Fin v2 (local, pattern-matched, no network) ----------
+     Understands English, Tagalog/Taglish and Bisaya (Davao-style). Every
+     question is normalised, then matched against small word lists that
+     cover all three languages at once, so "how much did I spend on food
+     today", "magkano gastos ko sa pagkain ngayon" and "pila akong gasto sa
+     kaon karon" all land on the same answer. Answers always come straight
+     from the person's real data; anything Fin can't match gets an honest
+     "didn't get that" with a few tappable ideas instead of a guess. */
 
-  function getAskMenuMessage(){
+  function stripDiacritics(s){ try{ return s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); }catch(e){ return s; } }
+  function normQ(s){
+    return stripDiacritics(String(s||'').toLowerCase()).replace(/[\u2019']/g,'')
+      .replace(/([a-z])\1{2,}/g,'$1$1').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+  }
+
+  var QR = {
+    rude: /\b(bobo|boba|tanga|gago|gaga|ulol|tarantado|tarantada|buang|boang|yawa|pisti|piste|lintik|siraulo|sira ulo|gunggong|bwisit|bwiset|hinampak|fuck|fck|shit|stupid|idiot|dumb|useless|shut up|animal ka|hayop ka|bogo ka|hilom ka|hilum ka|tumahimik ka|tahimik ka|walang kwenta|walay pulos|pangit ka)\b/,
+    today: /\b(today|karon|karong adlaw|karong adlawa|ngayon|ngayong araw|ganiha|kanina|karong buntag|karong gabii)\b/,
+    yest: /\b(yesterday|kahapon|gahapon|kagahapon)\b/,
+    week: /\b(this week|last 7 days|past week|past 7 days|week|weekly|linggo|semana|karong semanaha|kani nga semana|ngayong linggo|ning semanaha)\b/,
+    lastMonth: /\b(last month|previous month|prev month|nakaraang buwan|nakaraang bulan|miaging bulan|milabay nga bulan|milabay nga buwan|niaging bulan)\b/,
+    spend: /\b(spen[dt]|spent|spending|expenses?|gastos|gasto|nagastos|nagasto|gigasto|gastuhan|ubos|naubos|nawala|nabayad|gibayad|nagbayad|bayad|paid|pay)\b/,
+    howMuch: /\b(how much|how many|magkano|pila|tagpila|ilan|ilang|kung magkano|total)\b/,
+    left: /\b(left|remaining|remain|natira|natitira|matitira|nabilin|nahibilin|nahabilin|mabilin|tira|sobra|maiwan|saldo)\b/,
+    budget: /\b(budget|badyet|allowance|limit)\b/,
+    perDay: /\b(per day|a day|each day|daily|kada araw|araw araw|matag adlaw|adlaw adlaw|isang araw|usa ka adlaw)\b/,
+    canSpend: /\b(can|pwede|puwede|kaya|kaha|allowed|magagastos|mogastos|makagasto)\b/,
+    over: /\b(over|lampas|sobra na|over na|nalampas|milapas|nilapas|exceed|exceeded|overspend|overspent)\b/,
+    income: /\b(income|sweldo|sahod|suweldo|sinweldo|salary|kita|kinitaan|earn|earned|earning|kinita|bonus|sinahod)\b/,
+    wallet: /\b(wallets?|balance|balances|pitaka|gcash|g cash|maya|paymaya|cash|bank|pera|kwarta|money i have|net worth|networth|savings account|natitirang pera|pondo)\b/,
+    netWorth: /\b(net worth|networth)\b/,
+    goal: /\b(goals?|target|pangarap|savings goal|ipon goal)\b/,
+    save: /\b(saving|savings|saved|save|ipon|naipon|nakaipon|nakatigom|naka ipon|iipon|tigom|natigom|tinigom|nag ipon|nagipon|nag iipon|nagtigom)\b/,
+    loan: /\b(loans?|utang|utangan|pautang|pahulam|hulam|hulman|gihulam|gi hulam|nangutang|nakautang|gi utang|owe|owed|owes|lend|lent|borrow|borrowed|debt|debts|receivable|payable)\b/,
+    due: /\b(due|next|deadline|kanus a|kailan|kelan|petsa|schedule|upcoming|overdue|late|atrasado|lapas na)\b/,
+    owedToMe: /\b(owes? me|owed to me|owed me|receivable|utang sa akin|utang sa ako|utang nila|nangutang sa akin|nangutang nako|nangutang sa ako|pinautang|pinahiram|gipautang|gipahulam|kinsa.*utang.*nako|kinsa.*nangutang|sino.*may utang)\b/,
+    iOwe: /\b(i owe|do i owe|owe to|payable|utang ko|akong utang|akong mga utang|utangan ko|nangutang ako|nakautang ako|gihulam nako|gi utang nako|magkano utang ko|pila akong utang|pila ang utang ko|pila utang ko)\b/,
+    streak: /\b(streak|logging streak|sunod sunod)\b/,
+    biggest: /\b(biggest|largest|highest|most expensive|priciest|pinakamalaki|pinakamahal|pinakadako|pinaka dako|pinakamalaking|pinakagasto|pinakadaghan|labing dako|labing mahal)\b/,
+    catQ: /\b(category|categories|kategorya|kategoriya|top category|saan napupunta|saan napunta|asa napunta|asa naubos|asa nawala|asa nagpunta)\b/,
+    avg: /\b(average|avg|ave|karaniwan|kasagaran|sagad)\b/,
+    lastEntry: /\b(last|latest|recent|huling|pinakahuling|pinakabag o|bag ong|bag o|previous)\s+(few\s+)?(expense|expenses|entry|entries|purchase|purchases|gastos|gasto|logs?|transactions?|nilog|nalog|gi log)\b/,
+    count: /\b(how many|ilang|pila ka|ilan)\b.*\b(expense|expenses|entries|purchases|transactions|gastos|beses|ka beses)\b/,
+    enough: /\b(abot|abot pa|kasya|kakasya|igo|igo pa|sapat|enough|last until|last till|hangtod katapusan|hanggang katapusan|month end|end of month|katapusan|mabitin|kulang|projected|projection|forecast|run out|maubusan)\b/,
+    recur: /\b(recurring|subscription|subscriptions|subs|monthly bills|kada buwan|bawat buwan|buwan buwan|bulan bulan|matag bulan|every month|auto pay|autopay)\b/,
+    compare: /\b(compared|compare|vs|versus|kumpara|kaysa|mas gamay|mas kaunti|mas konti|mas mababa|mas mataas|mas taas|mas dako|mas malaki|mas mahal|mas barato|saving more|spending more|spending less|nag ipon ba|nabawasan|nadugangan)\b/,
+    ratio: /\b(ratio|income vs expense|income and expense|kita at gastos|kita ug gasto)\b/,
+    health: /\b(how am i doing|how am i|check in|checkin|status|overall|summary|buod|kumusta ang pera|kamusta pera|kumusta finances|kumusta budget|unsa na akong kwarta|musta na pera|musta ang pera)\b/,
+    tip: /\b(tip|tips|advice|payo|tambag|suggest|suggestion|suhestiyon|recommend)\b/,
+    def: /\b(what is|whats|what does|meaning of|define|ano ang|ano yung|ano ang ibig sabihin|unsa ang|unsay|unsa to|unsa ni|kahulugan)\b/
+  };
+
+  var QCAT = [
+    ['food', /\b(food|foods|eat|eating|kain|kumain|kaon|kumaon|pagkain|pagkaon|ulam|sud an|sudan|merienda|meryenda|snack|snacks|lunch|dinner|breakfast|almusal|panihapon|paniudto|pamahaw|milktea|milk tea|coffee|kape|jollibee|groceries|grocery|palengke|foodtrip|food trip|tinapay|inumin|softdrinks?)\b/],
+    ['transport', /\b(transport|transportation|transpo|commute|fare|pasahe|pamasahe|sakay|biyahe|gas|gasolina|fuel|grab|angkas|habal|tricycle|trike|jeep|jeepney|bus|van|parking|toll|motor)\b/],
+    ['shopping', /\b(shopping|shop|shopee|lazada|tiktok shop|bili|binili|palit|gipalit|damit|clothes|mall|gadgets?|online)\b/],
+    ['utilities', /\b(utilities|utility|bills?|kuryente|kuryenti|electric|electricity|tubig|water|internet|wifi|load|rent|renta|abang|upa)\b/],
+    ['health', /\b(health|medicine|medicines|meds|gamot|tambal|doctor|doktor|clinic|hospital|ospital|dental|dentist|vitamins|gym|checkup|check up)\b/],
+    ['entertainment', /\b(entertainment|movie|movies|sine|netflix|spotify|games?|gaming|inuman|inom|gala|lakwatsa|pasyal|panaw|videoke|karaoke|concert|party)\b/],
+    ['other-exp', /\b(other|others|misc|miscellaneous|lain lain|iba pa)\b/]
+  ];
+  function detectCat(q){
+    var best = null, bestIdx = 1e9;
+    QCAT.forEach(function(c){
+      var m = c[1].exec(q);
+      if(m && m.index<bestIdx){ bestIdx = m.index; best = c[0]; }
+    });
+    return best;
+  }
+
+  var SCOPE_LABEL = { today:'today', yesterday:'yesterday', week:'in the last 7 days', month:'this month', lastmonth:'last month' };
+  function detectScope(q){
+    if(QR.yest.test(q)) return 'yesterday';
+    if(QR.lastMonth.test(q)) return 'lastmonth';
+    if(QR.today.test(q)) return 'today';
+    if(QR.week.test(q)) return 'week';
+    return 'month';
+  }
+  function scopeRange(key){
+    var todayStr = safe(function(){ return global.today(); }, toLocalISO(new Date()));
+    var d = new Date(todayStr+'T00:00:00'), s;
+    if(key==='today') return [todayStr, todayStr];
+    if(key==='yesterday'){ d.setDate(d.getDate()-1); var y = toLocalISO(d); return [y, y]; }
+    if(key==='week'){ s = new Date(d); s.setDate(s.getDate()-6); return [toLocalISO(s), todayStr]; }
+    if(key==='lastmonth'){ s = new Date(d.getFullYear(), d.getMonth()-1, 1); return [toLocalISO(s), toLocalISO(new Date(d.getFullYear(), d.getMonth(), 0))]; }
+    return [toLocalISO(new Date(d.getFullYear(), d.getMonth(), 1)), todayStr];
+  }
+  function expensesBetween(a, b){
+    return (appState().expenses||[]).filter(function(e){ return e.date>=a && e.date<=b; });
+  }
+  function sumAmt(list){ return list.reduce(function(t,e){ return t+(e.amount||0); }, 0); }
+  function totalsByCat(list){ var t = {}; list.forEach(function(e){ t[e.cat] = (t[e.cat]||0)+e.amount; }); return t; }
+  function shortDate(dStr){
+    var d = new Date(dStr+'T00:00:00');
+    return isNaN(d) ? dStr : d.toLocaleString('en-US',{month:'short', day:'numeric'});
+  }
+
+  var WALLET_SKIP = /^(wallet|account|bank|card|the|my|and|savings)$/;
+  function matchWallets(q){
+    var out = [];
+    (appState().wallets||[]).forEach(function(w){
+      var label = normQ(w.label), hit = false;
+      if(!label) return;
+      if(q.indexOf(label)!==-1) hit = true;
+      if(!hit) label.split(' ').forEach(function(tok){
+        if(tok.length>=3 && !WALLET_SKIP.test(tok) && new RegExp('\\b'+tok+'\\b').test(q)) hit = true;
+      });
+      if(!hit && label.indexOf('gcash')!==-1 && /\bg cash\b/.test(q)) hit = true;
+      if(hit) out.push(w);
+    });
+    return out;
+  }
+
+  var GLOSS_ALIAS = {
+    'net worth':['networth'], 'debt-to-income ratio':['dti','debt to income'], '50/30/20 rule':['50 30 20','503020'],
+    'cash flow':['cashflow'], 'emergency fund':['emerhensya'], 'inflation':['implasyon'], 'compound interest':['compound'],
+    'interest rate':['interest'], 'savings rate':['saving rate']
+  };
+  function findGlossaryTerm(q){
+    var best = null, bl = 0;
+    FIN_GLOSSARY.forEach(function(item){
+      var names = [normQ(item.term)].concat(GLOSS_ALIAS[item.term.toLowerCase()]||[]);
+      names.forEach(function(n){ if(n && q.indexOf(n)!==-1 && n.length>bl){ best = item; bl = n.length; } });
+    });
+    return best;
+  }
+
+  // Suggestion chips for the Ask menu. `when` hides a chip that wouldn't
+  // make sense for this person's data yet (no loans, no budget, etc.).
+  var ASK_POOL = [
+    { label:'💸 Pila akong gasto karon?', q:'pila akong gasto karon' },
+    { label:'🍜 Food this month?', q:'how much did i spend on food this month' },
+    { label:'🎯 Natira sa budget?', q:'magkano natira sa budget ko', when:function(c){ return c.budgetLimit>0; } },
+    { label:'📆 Daily budget?', q:'how much can i spend per day', when:function(c){ return c.budgetLimit>0; } },
+    { label:'🏆 Biggest expense?', q:'biggest expense this month', when:function(c){ return c.hasExpenses; } },
+    { label:'🥇 Asa napunta akong kwarta?', q:'asa napunta akong kwarta ngayong buwan', when:function(c){ return c.hasExpenses; } },
+    { label:'📅 Next loan due?', q:'next loan due', when:function(c){ return c.hasLoans; } },
+    { label:'🙋 Who owes me?', q:'who owes me money', when:function(c){ return c.receivableCount>0; } },
+    { label:'💳 Pila akong utang?', q:'pila akong utang', when:function(c){ return c.payableCount>0; } },
+    { label:'👛 Pila akong kwarta?', q:'pila akong kwarta sa wallet', when:function(c){ return c.hasWallets; } },
+    { label:'🔮 Igo pa ba hangtod katapusan?', q:'igo pa ba akong kwarta hangtod katapusan', when:function(c){ return c.hasExpenses; } },
+    { label:'📈 Mas kaunti ba gastos ko?', q:'mas kaunti ba gastos ko kaysa last month', when:function(c){ return c.prevExp>0; } },
+    { label:'🧾 Last expenses?', q:'show my last expenses', when:function(c){ return c.hasExpenses; } },
+    { label:'🧮 Average per day?', q:'average spending per day', when:function(c){ return c.hasExpenses; } },
+    { label:'🎯 Goals progress?', q:'how are my goals doing', when:function(c){ return c.hasGoals; } },
+    { label:'🐖 Nakaipon ba ko?', q:'nakaipon ba ako ngayong buwan', when:function(c){ return c.curIncome>0; } },
+    { label:'🔁 Recurring bills?', q:'recurring bills' },
+    { label:'🔥 Streak?', q:'what is my streak' },
+    { label:'📖 What is inflation?', q:'what is inflation' }
+  ];
+
+  function getAskMenuMessage(ctx, tone, page){
+    ctx = ctx || {}; page = page||0;
+    var pool = ASK_POOL.filter(function(it){ return !it.when || it.when(ctx); });
+    var per = 4, chips = [];
+    for(var i=0;i<Math.min(per, pool.length);i++){ chips.push(pool[(page*per+i) % pool.length]); }
+    var actions = chips.map(function(c){ return { label:c.label, kind:'ask', query:c.q }; });
+    actions.push({ label:'✍️ Type a question', kind:'ask-custom' });
+    if(pool.length>per) actions.push({ label:'🔄 More ideas', kind:'ask-menu', page:page+1 });
+    actions.push({ label:'Menu', kind:'menu' });
     return {
-      text:"Ask me something — or type your own.",
-      actions:[
-        { label:'Spent on food this month?', kind:'ask', query:'how much did i spend on food this month' },
-        { label:'Next loan due?', kind:'ask', query:'next loan due' },
-        { label:'Saving more than last month?', kind:'ask', query:'saving more than last month' },
-        { label:'Type a question', kind:'ask-custom' },
-        { label:'Menu', kind:'menu' }
-      ]
+      text: tone==='businesslike'
+        ? "Ask about your spending, budget, loans, wallets, or goals. English, Tagalog, and Bisaya are all understood."
+        : "Ask away! English, Tagalog, o Bisaya — pwede tanan. Pick one or type your own. 🙌",
+      actions: actions
     };
   }
 
-  function answerQuestion(qRaw, ctx){
-    const q = (qRaw||'').toLowerCase();
-    if(!q.trim()){
-      return { text:"Didn't catch a question there — try asking about spending, budget, or loans.", actions:[{label:'Menu',kind:'menu'}] };
+  var RUDE_REPLIES = {
+    playful: [
+      "Aray, ha! Ayaw ko'g ingna ug ingon ana. Respeto lang, palihug. 😤",
+      "Hoy! Grabe ka naman. Pera ang binabantayan ko dito, hindi pang-away.",
+      "Nasaktan ko ana, uy. Mag-sorry ka una bago ta mag-istorya ug balik. 😠"
+    ],
+    businesslike: [
+      "Please keep it respectful and I'll gladly keep helping.",
+      "I'd appreciate a more respectful tone. I'm happy to help with your finances."
+    ]
+  };
+
+  function answerQuestion(qRaw, ctx, tone){
+    ctx = ctx || {};
+    var biz = tone==='businesslike';
+    var q = normQ(qRaw);
+    var st = appState();
+    function T(fun, bz){ return (biz && bz) ? bz : fun; }
+    function done(text, mood, follow, extra){
+      var actions = (extra||[]).slice();
+      (follow||[]).slice(0,2).forEach(function(f){ actions.push({ label:f[0], kind:'ask', query:f[1] }); });
+      actions.push({ label:'❓ Ask another', kind:'ask-menu' });
+      actions.push({ label:'Menu', kind:'menu' });
+      return { text:text, mood:mood||'idle', actions:actions };
     }
 
-    // "how much on [category] this/last month"
-    const catKeys = Object.keys(ctx.catTotals||{});
-    const mentionedCat = catKeys.find(c=> q.indexOf(c.replace('-',' '))!==-1 || q.indexOf(c)!==-1 )
-      || (q.indexOf('food')!==-1 ? 'food' : q.indexOf('transport')!==-1 ? 'transport'
-      : q.indexOf('shopping')!==-1 ? 'shopping' : q.indexOf('utilit')!==-1 ? 'utilities'
-      : q.indexOf('health')!==-1 ? 'health' : q.indexOf('entertain')!==-1 ? 'entertainment' : null);
-    if(mentionedCat && (q.indexOf('spend')!==-1 || q.indexOf('spent')!==-1 || q.indexOf('how much')!==-1)){
-      const amt = (ctx.catTotals||{})[mentionedCat] || 0;
-      return { text: amt>0 ? `${fmtSafe(amt)} on ${catLabel(mentionedCat)} this month.` : `Nothing logged under ${catLabel(mentionedCat)} this month yet.`,
-        actions:[{label:'Menu',kind:'menu'}] };
+    if(!q){
+      return done(T("Didn't catch a question there — try spending, budget, loans, wallets, or goals. English, Tagalog, o Bisaya, pwede!",
+                    "I didn't catch a question. Try asking about spending, budget, loans, wallets, or goals."), 'idle');
+    }
+    if(QR.rude.test(q)){
+      var rr = pick(biz ? RUDE_REPLIES.businesslike : RUDE_REPLIES.playful);
+      return { text:rr, mood:'angry', annoy:true, actions:[ { label:'Sorry po 🙏', kind:'apologize' }, { label:'Menu', kind:'menu' } ] };
     }
 
-    if(q.indexOf('loan')!==-1 && (q.indexOf('next')!==-1 || q.indexOf('due')!==-1)){
-      if(ctx.overdueLoan) return { text:`"${ctx.overdueLoan.name}" is already past due.`, mood:'concerned', actions:[{label:'View Loans',kind:'navigate',module:'loans'},{label:'Menu',kind:'menu'}] };
-      if(ctx.dueSoonLoan){
-        const l = ctx.dueSoonLoan;
-        const when = l.daysUntil<=0 ? 'today' : l.daysUntil===1 ? 'tomorrow' : `in ${l.daysUntil} days`;
-        return { text:`"${l.name}" is due ${when}.`, actions:[{label:'View Loans',kind:'navigate',module:'loans'},{label:'Menu',kind:'menu'}] };
+    var words = q.split(' ').length;
+    var scope = detectScope(q), cat = detectCat(q);
+    var hasSpend = QR.spend.test(q);
+    var dataIntent = !!cat || hasSpend || QR.budget.test(q) || QR.loan.test(q) || QR.wallet.test(q) || QR.goal.test(q) ||
+      QR.save.test(q) || QR.income.test(q) || QR.streak.test(q) || QR.recur.test(q) || QR.enough.test(q) ||
+      QR.biggest.test(q) || QR.health.test(q) || QR.left.test(q) || QR.avg.test(q);
+
+    if(!dataIntent && words<=8){
+      var talk = smallTalk(q, ctx, biz, T, done);
+      if(talk) return talk;
+    }
+
+    // ----- "what is X" -----
+    if(QR.def.test(q)){
+      var term = findGlossaryTerm(q);
+      if(term) return done(term.term+' — '+term.def, 'idle', null, [ { label:'Another term', kind:'glossary' } ]);
+    }
+
+    // ----- streak -----
+    if(QR.streak.test(q)){
+      return done(ctx.streakDays>0 ? T(ctx.streakDays+'-day logging streak right now. Ayos! 🔥', ctx.streakDays+'-day logging streak right now.') : "No active streak — log an expense today to start one.", ctx.streakDays>=3?'happy':'idle');
+    }
+
+    // ----- loans / utang -----
+    if(QR.loan.test(q)){
+      var open = (st.loans||[]).filter(function(l){ return !l.settled; });
+      var pay = open.filter(function(l){ return l.type==='payable'; });
+      var rec = open.filter(function(l){ return l.type==='receivable'; });
+      var nm = function(list){ return list.slice(0,3).map(function(l){ return l.name+' ('+fmtSafe(l.amount)+')'; }).join(', ')+(list.length>3 ? ' +'+(list.length-3)+' more' : ''); };
+      var loanAct = [ { label:'View Loans', kind:'navigate', module:'loans' } ];
+      if(QR.owedToMe.test(q)){
+        if(!rec.length) return done("Nobody owes you anything right now — no receivable loans on record.", 'idle', null, loanAct);
+        return done(rec.length+' loan'+(rec.length>1?'s are':' is')+' owed back to you, '+fmtSafe(rec.reduce(function(t,l){ return t+l.amount; },0))+' in total: '+nm(rec)+'.', 'idle', null, loanAct);
       }
-      return { text: ctx.payableCount>0 ? "Nothing due in the next few days, though you still have loans outstanding." : "No upcoming loans due.", actions:[{label:'Menu',kind:'menu'}] };
+      if(QR.due.test(q) || !open.length){
+        if(ctx.overdueLoan) return done('"'+ctx.overdueLoan.name+'" is already past due.', 'concerned', null, loanAct);
+        if(ctx.dueSoonLoan){
+          var l = ctx.dueSoonLoan;
+          var when = l.daysUntil<=0 ? 'today' : l.daysUntil===1 ? 'tomorrow' : 'in '+l.daysUntil+' days';
+          return done('"'+l.name+'" is due '+when+'.', 'idle', null, loanAct);
+        }
+        return done(ctx.payableCount>0 ? "Nothing due in the next few days, though you still have loans outstanding." : "No upcoming loans due.", 'idle', null, loanAct);
+      }
+      if(QR.iOwe.test(q)){
+        if(!pay.length) return done(T("You don't owe anyone right now. Wala kay utang — nice! 🎉", "You don't owe anyone right now."), 'happy');
+        return done('You owe '+fmtSafe(ctx.totalPayable)+' across '+pay.length+' loan'+(pay.length>1?'s':'')+': '+nm(pay)+'.', 'idle', [ ['When is the next one due?','next loan due'] ], loanAct);
+      }
+      var bits = [];
+      if(pay.length) bits.push('You owe '+fmtSafe(ctx.totalPayable)+' ('+pay.length+' loan'+(pay.length>1?'s':'')+').');
+      if(rec.length) bits.push(fmtSafe(ctx.totalReceivable)+' is owed to you ('+rec.length+' loan'+(rec.length>1?'s':'')+').');
+      return done(bits.join(' '), 'idle', [ ['Next one due?','next loan due'] ], loanAct);
     }
 
-    if(q.indexOf('saving')!==-1 && q.indexOf('last month')!==-1){
-      if(ctx.spendingDeltaPct===null) return { text:"Not enough last-month data to compare yet.", actions:[{label:'Menu',kind:'menu'}] };
-      return { text: ctx.spendingDeltaPct<0 ? `Yes — spending is down ${Math.abs(ctx.spendingDeltaPct)}% versus last month.` : ctx.spendingDeltaPct>0 ? `Not quite — spending is up ${ctx.spendingDeltaPct}% versus last month.` : "About the same as last month.",
-        actions:[{label:'Menu',kind:'menu'}] };
+    // ----- recurring -----
+    if(QR.recur.test(q)){
+      var exps = st.expenses||[];
+      var descs = []; exps.filter(function(e){ return e.recurring; }).forEach(function(e){ if(descs.indexOf(e.desc)===-1) descs.push(e.desc); });
+      if(!descs.length) return done("No recurring expenses set up yet.", 'idle');
+      var rtotal = 0;
+      descs.forEach(function(desc){ var m = exps.filter(function(e){ return e.recurring && e.desc===desc; }); if(m.length) rtotal += m[m.length-1].amount; });
+      return done(descs.length+' recurring expense'+(descs.length>1?'s':'')+' totalling about '+fmtSafe(rtotal)+' a month.', 'idle');
     }
 
-    if(q.indexOf('budget')!==-1 && (q.indexOf('left')!==-1 || q.indexOf('remain')!==-1)){
-      if(!ctx.budgetLimit) return { text:"No budget set yet for this month.", actions:[{label:'Set Budget',kind:'navigate',module:'goals'},{label:'Menu',kind:'menu'}] };
-      const left = ctx.budgetLimit-ctx.curExp;
-      return { text: left>=0 ? `${fmtSafe(left)} left in this month's budget.` : `${fmtSafe(Math.abs(left))} over this month's budget.`, mood: left<0?'concerned':'idle',
-        actions:[{label:'Menu',kind:'menu'}] };
+    // ----- will my money last? -----
+    if(QR.enough.test(q)){
+      var parts = [];
+      if(ctx.curExp>0){
+        parts.push("At this pace you'll spend about "+fmtSafe(ctx.projectedSpend)+' by month-end.');
+        var bad = false;
+        if(ctx.budgetLimit>0){
+          var diff = ctx.budgetLimit-ctx.projectedSpend;
+          if(diff<0) bad = true;
+          parts.push(diff>=0 ? "That's "+fmtSafe(diff)+' under your '+fmtSafe(ctx.budgetLimit)+T(' budget — kaya pa! 💪',' budget.')
+                             : "That's "+fmtSafe(-diff)+' over your '+fmtSafe(ctx.budgetLimit)+T(' budget — hinay-hinay lang.',' budget.'));
+        }
+        if(ctx.curIncome>0){
+          var lf = ctx.curIncome-ctx.projectedSpend;
+          if(lf<0) bad = true;
+          parts.push(lf>=0 ? 'Against your '+fmtSafe(ctx.curIncome)+' income, about '+fmtSafe(lf)+' should be left.'
+                           : 'Against your '+fmtSafe(ctx.curIncome)+' income, you would be about '+fmtSafe(-lf)+' short.');
+        }
+        if(ctx.dayOfMonth<=3) parts.push('(Early in the month, so this gets more accurate as you log.)');
+        return done(parts.join(' '), bad?'concerned':'happy', [ ['Daily budget?','how much can i spend per day'] ]);
+      }
+      return done("Nothing logged this month yet, so there's nothing to project from.", 'idle');
     }
 
-    if(q.indexOf('streak')!==-1){
-      return { text: ctx.streakDays>0 ? `${ctx.streakDays}-day logging streak right now.` : "No active streak — log an expense today to start one.", actions:[{label:'Menu',kind:'menu'}] };
+    // ----- budget -----
+    if(QR.budget.test(q) || (QR.perDay.test(q) && QR.canSpend.test(q) && ctx.budgetLimit>0)){
+      if(!ctx.budgetLimit) return done("No budget set for this month yet.", 'idle', null, [ { label:'Set Budget', kind:'navigate', module:'goals' } ]);
+      var remaining = ctx.budgetLimit-ctx.curExp;
+      if(QR.perDay.test(q)){
+        var daysLeft = Math.max(1, ctx.daysInMonth-ctx.dayOfMonth+1);
+        if(remaining<=0) return done("You've already used up this month's budget, so there's nothing left to spread across the days.", 'concerned');
+        return done('About '+fmtSafe(Math.floor(remaining/daysLeft))+' a day for the remaining '+daysLeft+' days ('+fmtSafe(remaining)+' left).', 'idle', [ ['Will it last?','igo pa ba akong kwarta hangtod katapusan'] ]);
+      }
+      if(QR.over.test(q)){
+        return done(ctx.overBudget ? 'Yes — '+ctx.budgetPct+'% of your '+fmtSafe(ctx.budgetLimit)+' budget, '+fmtSafe(-remaining)+' over.' : 'Not yet — '+ctx.budgetPct+'% used, with '+fmtSafe(remaining)+' to go.', ctx.overBudget?'concerned':'happy');
+      }
+      return done(remaining>=0 ? fmtSafe(remaining)+' left of your '+fmtSafe(ctx.budgetLimit)+' budget ('+ctx.budgetPct+'% used).' : fmtSafe(-remaining)+' over your '+fmtSafe(ctx.budgetLimit)+' budget.',
+        remaining<0?'concerned':'idle', [ ['Daily budget?','how much can i spend per day'] ], [ { label:'Check Budget', kind:'navigate', module:'goals' } ]);
     }
 
-    // Wallet balances.
-    if(q.indexOf('wallet')!==-1 && (q.indexOf('balance')!==-1 || q.indexOf('how much')!==-1 || q.indexOf('have')!==-1)){
-      const wallets = appState().wallets||[];
-      if(!wallets.length) return { text:"No wallets set up yet.", actions:[{label:'Add Wallet',kind:'navigate',module:'balances'},{label:'Menu',kind:'menu'}] };
-      const lines = wallets.map(w=> `${w.label}: ${fmtSafe(w.balance)}`);
-      return { text: lines.join(', ')+'.', actions:[{label:'Menu',kind:'menu'}] };
-    }
-
-    // Total upcoming recurring bills.
-    if(q.indexOf('recurring')!==-1 || q.indexOf('bill')!==-1){
-      const expenses = appState().expenses||[];
-      const recurringDescs = [...new Set(expenses.filter(e=>e.recurring).map(e=>e.desc))];
-      if(!recurringDescs.length) return { text:"No recurring expenses set up yet.", actions:[{label:'Menu',kind:'menu'}] };
-      let total = 0;
-      recurringDescs.forEach(desc=>{
-        const matches = expenses.filter(e=>e.recurring && e.desc===desc);
-        if(matches.length) total += matches[matches.length-1].amount;
+    // ----- goals -----
+    if(QR.goal.test(q)){
+      var goals = (st.goals||[]).filter(function(g){ return g.target>0; });
+      if(!goals.length) return done("No savings goals yet. Even a small target helps.", 'idle', null, [ { label:'Add Goal', kind:'navigate', module:'goals' } ]);
+      goals = goals.slice().sort(function(a,b){
+        var pa = a.saved>=a.target ? -1 : a.saved/a.target, pb = b.saved>=b.target ? -1 : b.saved/b.target; return pb-pa;
       });
-      return { text: `${recurringDescs.length} recurring expense${recurringDescs.length>1?'s':''} totalling about ${fmtSafe(total)} a month.`, actions:[{label:'Menu',kind:'menu'}] };
+      var lines = goals.slice(0,3).map(function(g){
+        return (g.saved>=g.target ? '✅ ' : '• ')+g.name+': '+Math.min(100,Math.round(g.saved/g.target*100))+'% ('+fmtSafe(g.saved)+' of '+fmtSafe(g.target)+')';
+      });
+      return done(lines.join('\n'), goals.some(function(g){ return g.saved/g.target>=0.9; })?'happy':'idle', null, [ { label:'View Goals', kind:'navigate', module:'goals' } ]);
     }
 
-    // Income-vs-expense ratio.
-    if(q.indexOf('ratio')!==-1 || (q.indexOf('income')!==-1 && q.indexOf('expense')!==-1)){
-      if(!ctx.curIncome) return { text:"No income logged yet this month to compare against.", actions:[{label:'Menu',kind:'menu'}] };
-      const ratioPct = Math.round((ctx.curExp/ctx.curIncome)*100);
-      return { text:`You've spent about ${ratioPct}% of what you've earned this month (${fmtSafe(ctx.curExp)} of ${fmtSafe(ctx.curIncome)}).`, actions:[{label:'Menu',kind:'menu'}] };
+    // ----- compare with last month -----
+    if((QR.compare.test(q) || (QR.save.test(q) && QR.lastMonth.test(q))) && (QR.save.test(q) || hasSpend || /spending/.test(q))){
+      if(ctx.spendingDeltaPct===null) return done("Not enough last-month data to compare yet.", 'idle');
+      var cmp = ' ('+fmtSafe(ctx.curExp)+' so far vs '+fmtSafe(ctx.prevExp)+' last month)';
+      return done(ctx.spendingDeltaPct<0 ? T('Yes — spending is down ','Spending is down ')+Math.abs(ctx.spendingDeltaPct)+'% versus last month'+cmp+'.'
+        : ctx.spendingDeltaPct>0 ? T('Not quite — spending is up ','Spending is up ')+ctx.spendingDeltaPct+'% versus last month'+cmp+'.'
+        : 'About the same as last month'+cmp+'.', ctx.spendingDeltaPct>0?'concerned':'happy');
     }
 
-    // Projected "how much left this month" — pace-based, not just literal-to-date.
-    if(q.indexOf('left')!==-1 && q.indexOf('month')!==-1){
-      if(!ctx.curIncome) return { text:"No income logged yet this month to project against.", actions:[{label:'Menu',kind:'menu'}] };
-      const projectedLeft = ctx.curIncome - (ctx.projectedSpend!==undefined && ctx.projectedSpend!==null ? ctx.projectedSpend : ctx.curExp);
-      return { text: projectedLeft>=0
-          ? `At this pace, about ${fmtSafe(projectedLeft)} left by month-end.`
-          : `At this pace, you're projected to be ${fmtSafe(Math.abs(projectedLeft))} short by month-end.`,
-        mood: projectedLeft<0?'concerned':'idle',
-        actions:[{label:'Menu',kind:'menu'}] };
+    // ----- biggest expense / top category -----
+    if(QR.biggest.test(q) || QR.catQ.test(q)){
+      var rg = scopeRange(scope), list0 = expensesBetween(rg[0], rg[1]);
+      if(!list0.length) return done('Nothing logged '+SCOPE_LABEL[scope]+" yet, so there's no biggest to show.", 'idle');
+      if(QR.catQ.test(q) || (!QR.biggest.test(q))){
+        var tc = totalsByCat(list0), topC = null, topA = 0;
+        Object.keys(tc).forEach(function(k){ if(tc[k]>topA){ topA = tc[k]; topC = k; } });
+        return done(catLabel(topC)+' leads '+SCOPE_LABEL[scope]+' at '+fmtSafe(topA)+', about '+Math.round(topA/sumAmt(list0)*100)+'% of your spending.', 'idle', [ ['Biggest single expense?','biggest expense '+SCOPE_LABEL[scope]] ]);
+      }
+      if(cat) list0 = list0.filter(function(e){ return e.cat===cat; });
+      if(!list0.length) return done('Nothing logged under '+catLabel(cat)+' '+SCOPE_LABEL[scope]+' yet.', 'idle');
+      var big = list0.reduce(function(m,e){ return e.amount>m.amount ? e : m; }, list0[0]);
+      return done('Biggest '+(cat?catLabel(cat)+' ':'')+'expense '+SCOPE_LABEL[scope]+': "'+big.desc+'" — '+fmtSafe(big.amount)+' ('+catLabel(big.cat)+', '+shortDate(big.date)+').', 'idle', [ ['Top category?','biggest category '+SCOPE_LABEL[scope]] ]);
     }
 
-    return { text:"I'm not sure about that one yet — I can answer things like spending by category, upcoming loans, budget left, wallet balances, recurring bills, or how this month compares to last.", actions:[{label:'Menu',kind:'menu'}] };
+    // ----- average per day -----
+    if(QR.avg.test(q) || (QR.perDay.test(q) && hasSpend)){
+      var ar = scopeRange(scope), tot = sumAmt(expensesBetween(ar[0], ar[1]));
+      var days = scope==='today'||scope==='yesterday' ? 1 : scope==='week' ? 7 : scope==='lastmonth' ? new Date(new Date().getFullYear(), new Date().getMonth(), 0).getDate() : Math.max(1, ctx.dayOfMonth||1);
+      if(!tot) return done('Nothing logged '+SCOPE_LABEL[scope]+' yet.', 'idle');
+      var avgTxt = "You're averaging about "+fmtSafe(Math.round(tot/days))+' a day '+SCOPE_LABEL[scope]+'.';
+      if(scope==='month' && ctx.budgetLimit>0) avgTxt += ' Your budget allows about '+fmtSafe(Math.round(ctx.budgetLimit/ctx.daysInMonth))+' a day.';
+      return done(avgTxt, 'idle');
+    }
+
+    // ----- last few expenses -----
+    if(QR.lastEntry.test(q)){
+      var recent = (st.expenses||[]).slice(-3).reverse();
+      if(!recent.length) return done("No expenses logged yet.", 'idle', null, [ { label:'Add Expense', kind:'navigate', module:'expenses', focus:'exp-desc' } ]);
+      return done(recent.map(function(e){ return '• '+e.desc+' — '+fmtSafe(e.amount)+' ('+catLabel(e.cat)+', '+shortDate(e.date)+')'; }).join('\n'), 'idle', null, [ { label:'View Expenses', kind:'navigate', module:'expenses' } ]);
+    }
+
+    // ----- how many expenses -----
+    if(QR.count.test(q)){
+      var cr = scopeRange(scope), cl = expensesBetween(cr[0], cr[1]);
+      return done('You logged '+cl.length+' expense'+(cl.length===1?'':'s')+' '+SCOPE_LABEL[scope]+(cl.length?' totalling '+fmtSafe(sumAmt(cl))+'.':'.'), 'idle');
+    }
+
+    // ----- income vs expense ratio -----
+    if(QR.ratio.test(q) || (QR.income.test(q) && /\b(expense|expenses|gastos|gasto|spend|spent)\b/.test(q))){
+      if(!ctx.curIncome) return done("No income logged yet this month to compare against.", 'idle');
+      return done("You've spent about "+Math.round((ctx.curExp/ctx.curIncome)*100)+'% of what you have earned this month ('+fmtSafe(ctx.curExp)+' of '+fmtSafe(ctx.curIncome)+').', ctx.curExp>ctx.curIncome?'concerned':'idle');
+    }
+
+    // ----- spending (total, by category, by wallet, any period) -----
+    if(cat || hasSpend){
+      var sr = scopeRange(scope), sl = expensesBetween(sr[0], sr[1]), sw = matchWallets(q);
+      var allTotal = sumAmt(sl);
+      if(sw.length===1){ sl = sl.filter(function(e){ return e.source===sw[0].id; }); }
+      if(cat) sl = sl.filter(function(e){ return e.cat===cat; });
+      var what = (cat ? ' on '+catLabel(cat) : '')+(sw.length===1 ? ' using '+sw[0].label : '');
+      if(!sl.length) return done('Nothing logged'+what+' '+SCOPE_LABEL[scope]+' yet.', 'idle', null, [ { label:'Add Expense', kind:'navigate', module:'expenses', focus:'exp-desc' } ]);
+      var stotal = sumAmt(sl), out = fmtSafe(stotal)+what+' '+SCOPE_LABEL[scope]+(sl.length>1 ? ' across '+sl.length+' expenses' : '')+'.';
+      if((cat||sw.length===1) && allTotal>stotal) out += ' That is about '+Math.round(stotal/allTotal*100)+'% of everything you spent '+SCOPE_LABEL[scope]+' ('+fmtSafe(allTotal)+').';
+      else if(!cat && scope==='month' && ctx.budgetPct!==null) out += ' You are at '+ctx.budgetPct+'% of your budget.';
+      return done(out, (scope==='month' && ctx.overBudget)?'concerned':'idle', [ ['Biggest expense?','biggest expense '+SCOPE_LABEL[scope]], ['Average per day?','average spending per day'] ]);
+    }
+
+    // ----- income -----
+    if(QR.income.test(q)){
+      var incVal = scope==='lastmonth' ? ctx.prevIncome : ctx.curIncome, incWhen = scope==='lastmonth' ? 'last month' : 'this month';
+      if(!incVal) return done('No income logged for '+incWhen+' yet.', 'idle', null, [ { label:'Add Income', kind:'navigate', module:'income', focus:'inc-amount' } ]);
+      var it = fmtSafe(incVal)+' came in '+incWhen+'.';
+      if(scope!=='lastmonth' && ctx.curExp>0) it += ' After '+fmtSafe(ctx.curExp)+' in expenses, that leaves about '+fmtSafe(ctx.curIncome-ctx.curExp)+'.';
+      return done(it, 'happy');
+    }
+
+    // ----- money left this month -----
+    if(QR.left.test(q) && !QR.wallet.test(q)){
+      if(!ctx.curIncome) return done('No income logged yet this month, so I can not work out what is left.', 'idle', null, [ { label:'Add Income', kind:'navigate', module:'income', focus:'inc-amount' } ]);
+      var leftNow = ctx.curIncome-ctx.curExp, leftEnd = ctx.curIncome-ctx.projectedSpend;
+      return done((leftNow>=0 ? fmtSafe(leftNow)+' left so far this month' : fmtSafe(-leftNow)+' over what you have earned this month')+'. At this pace: '+(leftEnd>=0 ? 'about '+fmtSafe(leftEnd)+' left by month-end.' : 'about '+fmtSafe(-leftEnd)+' short by month-end.'), leftEnd<0?'concerned':'idle');
+    }
+
+    // ----- wallets / net worth -----
+    if(QR.wallet.test(q) || (QR.howMuch.test(q) && /\b(money|pera|kwarta|have|naa|naay|meron|mayroon)\b/.test(q))){
+      var ws = st.wallets||[];
+      if(!ws.length) return done("No wallets set up yet.", 'idle', null, [ { label:'Add Wallet', kind:'navigate', module:'balances' } ]);
+      var wtotal = ws.reduce(function(t,w){ return t+(w.balance||0); }, 0), anyNeg = ws.some(function(w){ return w.balance<0; });
+      if(QR.netWorth.test(q)){
+        return done('Roughly '+fmtSafe(wtotal+ctx.totalReceivable-ctx.totalPayable)+': '+fmtSafe(wtotal)+' across wallets, plus '+fmtSafe(ctx.totalReceivable)+' owed to you, minus '+fmtSafe(ctx.totalPayable)+' you owe.', 'idle', null, [ { label:'View Balances', kind:'navigate', module:'balances' } ]);
+      }
+      var mw = matchWallets(q);
+      var pickW = (mw.length && mw.length<ws.length) ? mw : ws;
+      var wl = pickW.map(function(w){ return w.label+': '+fmtSafe(w.balance); }).join(', ');
+      return done(pickW===ws ? wl+' — '+fmtSafe(wtotal)+' in total.' : wl+'.', anyNeg?'concerned':'idle', null, [ { label:'View Balances', kind:'navigate', module:'balances' } ]);
+    }
+
+    // ----- savings this month -----
+    if(QR.save.test(q)){
+      if(!ctx.curIncome) return done('No income logged this month yet, so I can not tell how much you have saved.', 'idle', null, [ { label:'Add Income', kind:'navigate', module:'income', focus:'inc-amount' } ]);
+      var net = ctx.curIncome-ctx.curExp;
+      return done(net>=0 ? T('Yes — ','')+'about '+fmtSafe(net)+' kept so far this month ('+ctx.savingsRatePct+'% of income).' : 'Not yet — you are '+fmtSafe(-net)+' over what came in this month.', net>=0?'happy':'concerned', [ ['Goals progress?','how are my goals doing'] ]);
+    }
+
+    // ----- overall check-in / tips -----
+    if(QR.health.test(q)) return getHealthMessage(ctx);
+    if(QR.tip.test(q)) return getTipMessage(new Set(), ctx);
+
+    // ----- small talk that came with a longer message -----
+    var talk2 = smallTalk(q, ctx, biz, T, done);
+    if(talk2) return talk2;
+
+    // ----- honest fallback with ideas -----
+    var ideas = ASK_POOL.filter(function(it){ return !it.when || it.when(ctx); });
+    var fb = [];
+    for(var n=0; n<3 && ideas.length; n++){ fb.push(ideas.splice(Math.floor(Math.random()*ideas.length),1)[0]); }
+    var fbActions = fb.map(function(c){ return { label:c.label, kind:'ask', query:c.q }; });
+    fbActions.push({ label:'✍️ Try again', kind:'ask-custom' });
+    fbActions.push({ label:'Menu', kind:'menu' });
+    return {
+      text: T("Hala, wala ko kasabot ana 😅 I can answer questions on spending, budget, loans, wallets, and goals — English, Tagalog, o Bisaya. Try one of these:",
+             "I'm not sure I understood that. I can answer questions about spending, budget, loans, wallets, and goals — try one of these:"),
+      mood:'idle', actions: fbActions
+    };
   }
+
+  function smallTalk(q, ctx, biz, T, done){
+    var tod = ctx.timeOfDay;
+    var bis = tod==='morning' ? 'Maayong buntag' : tod==='afternoon' ? 'Maayong hapon' : 'Maayong gabii';
+    if(/\b(who are you|sino ka|kinsa ka|unsa ka|what are you|pangalan mo|imong ngalan|ano ka)\b/.test(q)){
+      return done(T("Ako si Fin — imong finance buddy sa FINUITY. Ako ang nagbabantay sa imong budget, loans, ug goals. 🪙", "I'm Fin, your FINUITY assistant. I keep an eye on your budget, loans, and goals."), 'happy');
+    }
+    if(/\b(how are you|how r u|hows it going|kumusta ka|kamusta ka|musta ka|kumusta na ka|unsa na|kumusta na)\b/.test(q)){
+      return done(T(pick(["Ayos ra ko! Nagbantay lang sa imong kwarta. Ikaw, kumusta?", "Okay lang ako — coin life is good. 🪙 Ikaw?", "Maayo ra ko, salamat! Naa koy mata sa imong budget. 👀"]), "Doing well, thank you. How can I help?"), 'happy');
+    }
+    if(/\b(thanks|thank you|thx|salamat|maraming salamat|salamat kaayo|salamat gyud|tenkyu|arigato)\b/.test(q)){
+      return done(T(pick(["Walang anuman! 💛", "Walay sapayan! Naa ra ko diri.", "Anytime! Basta kwarta ang topic, ready ko."]), "You're welcome."), 'happy');
+    }
+    if(/\b(help|tulong|tabang|what can you do|unsay mahimo nimo|ano kaya mo|ano magagawa mo|commands)\b/.test(q)){
+      var ex = ASK_POOL.filter(function(it){ return !it.when || it.when(ctx); }).slice(0,2).map(function(c){ return { label:c.label, kind:'ask', query:c.q }; });
+      return { text: T("Pwede ko motubag ug pangutana bahin sa:\n• gastos (today, this week, this month, by category)\n• budget ug daily allowance\n• wallets ug balances\n• utang ug due dates\n• goals ug savings\nEnglish, Tagalog, o Bisaya — pwede tanan!",
+                        "I can answer questions about:\n• spending (today, this week, this month, by category)\n• budget and daily allowance\n• wallets and balances\n• loans and due dates\n• goals and savings\nEnglish, Tagalog, and Bisaya are supported."),
+        mood:'happy', actions: ex.concat([ { label:'✍️ Type a question', kind:'ask-custom' }, { label:'Menu', kind:'menu' } ]) };
+    }
+    if(/\b(i love you|love you|mahal kita|gihigugma taka|crush kita|pogi|gwapo|gwapa|cute|kyut|ganda)\b/.test(q)){
+      return done(T("Aww, salamat! 🥺 Coin lang ako, ha — pero puwede ta mag-bonding sa budget.", "Thank you! Now, back to your finances?"), 'happy');
+    }
+    if(/\b(joke|biro|patawa|pakatawa|magpatawa)\b/.test(q)){
+      return done(T(pick(["Ang sweldo parang bisita — moabot, unya mopauli dayon. 😅", "Ang budget parang diet: plano lang sa Lunes. 😆", "Bakit mahilig sa coin ang wallet? Kasi laging kulang sa 'sense'. 🪙"]), "I'm better with numbers than jokes, I'm afraid."), 'happy');
+    }
+    if(/\b(pagod|pooy|gikapoy|kapoy|bored|boring|stress|stressed|lungkot|malungkot|nalulungkot|gikapoy na ko)\b/.test(q)){
+      return done(T("Kapoy jud, 'no? Pahulay ka anang gamay. Ako na bahala mo-bantay sa budget karon. 💛", "That sounds tiring. Take a break — I'll keep an eye on things."), 'idle');
+    }
+    if(/\b(good night|goodnight|gn|maayong gabii|magandang gabi)\b/.test(q)){
+      return done(T("Good night! Pahulay na. Ako na bahala. 🌙", "Good night."), 'happy');
+    }
+    if(/\b(bye|paalam|babay|ingat|hangtod sa sunod|goodbye)\b/.test(q)){
+      return done(T("Sige, ingat! Balik lang kung naa kay pangutana. 👋", "Take care. I'm here whenever you need me."), 'happy');
+    }
+    if(words3(q)<=4 && /\b(hi|hello|hey|hoy|uy|yo|oy|dong|day|bai|beh|bes|pre|kumusta|kamusta|musta|good morning|good afternoon|good evening|maayong buntag|maayong hapon|magandang umaga|magandang hapon)\b/.test(q)){
+      return done(T(pick([bis+'! Unsa may kinahanglan nimo? 😊', "Uy, kumusta! Unsay pangutana nimo bahin sa imong kwarta?", "Hoy! Andito lang ako. Ano'ng gusto mong malaman?"]), "Hello. How can I help?"), 'happy');
+    }
+    return null;
+  }
+  function words3(q){ return q.split(' ').length; }
 
   /* ---------- 15. on-device / privacy line ---------- */
 
@@ -1570,6 +1950,77 @@
     return { text: text, mood: mood };
   }
 
+  /* ---------- 19. annoyance: irritated -> angry -> sulking ----------
+     pet.js counts rapid repeated taps (and shaking Fin while dragging) and
+     asks for the line for the stage it reached. Stage 0 is a mild "easy
+     there", stage 1 is properly angry, stage 2 is a full sulk where Fin
+     stops talking until the person says sorry (or waits it out). Voice is
+     casual Taglish/Bisaya in the playful tone, calm English when the
+     person picked the businesslike tone. */
+
+  var ANNOY_LINES = {
+    playful: [
+      [ "Uy, hinay-hinay lang sa pag-tap, ha? Sensitibo ko.",
+        "Naa ka bay kinahanglan? Kay kung wala, ayaw sige'g hikap nako, uy.",
+        "Hoy, kanina ka pa tap nang tap. Ano bang kailangan mo? 😒",
+        "Ayaw sige'g hikap nako, uy! Nakakakiliti na." ],
+      [ "Nasuko na ko, ha! Ayaw na ko'g hilabti, palihug. 😠",
+        "Sobra ka na! Hindi ako laruan — pera ang binabantayan ko dito!",
+        "Wala ba kay lain buhaton? Busy ko nagbantay sa imong kwarta! 😤",
+        "Isa pang tap, magtatampo na talaga ako." ],
+      [ "TAMA NA!! 😡 Nagmugtok na ko. Mag-sorry ka una.",
+        "Ambot nimo! Nag-walk out na ko. Mag-sorry ka una bago ta mag-istorya.",
+        "Nasuko na jud ko nimo! 💢 Mag-sorry ka, kung dili, dili ko mo-istorya." ]
+    ],
+    businesslike: [
+      [ "Please tap gently — I'm here whenever you need me.",
+        "If you need something, just let me know instead of tapping repeatedly." ],
+      [ "I'm getting frustrated with the repeated tapping. Please stop.",
+        "This is becoming disruptive. Please give me a moment." ],
+      [ "That's enough. I'm pausing for a while — an apology would be appreciated." ]
+    ]
+  };
+
+  function getAnnoyedMessage(stage, tone){
+    var set = ANNOY_LINES[tone==='businesslike' ? 'businesslike' : 'playful'];
+    var lines = set[Math.max(0, Math.min(stage, set.length-1))];
+    return { text: pick(lines), mood:'angry' };
+  }
+
+  function getSulkMessage(tone){
+    return { text: pick(tone==='businesslike'
+      ? [ "I'm pausing for now. An apology would help.", "Not right now, please." ]
+      : [ "Hmp. Mag-sorry ka una. 😤", "Nagmugtok pa ko. Ayaw ko'g hilabti.",
+          "Wala ko'y gana mag-istorya karon. Ambot nimo.", "...", "Sorry una, ha?" ]),
+      mood:'angry',
+      actions:[ { label:'Sorry na 🙏', kind:'apologize' }, { label:'Ignore', kind:'dismiss' } ] };
+  }
+
+  function getApologyMessage(tone){
+    return { text: pick(tone==='businesslike'
+      ? [ "Apology accepted. Thank you — how can I help?" ]
+      : [ "Sige, gipasaylo na tika. Pero hinay-hinay na, ha! 🥺",
+          "Okay na ko. Balik ta sa budget nato, ha? 💛",
+          "Hay, sige na nga. Pinatawad na kita. Pero ayaw na balik-balik, ha!" ]),
+      mood:'happy',
+      actions:[ { label:'Menu', kind:'menu' } ] };
+  }
+
+  function getCooldownMessage(tone){
+    return { text: tone==='businesslike'
+      ? "I'm back to normal. How can I help?"
+      : "Okay na ko. Nag-cool down na. Unsa may kinahanglan nimo?",
+      mood:'idle',
+      actions:[ { label:'Menu', kind:'menu' } ] };
+  }
+
+  function getShakenMessage(tone){
+    return { text: pick(tone==='businesslike'
+      ? [ "Please don't shake me." ]
+      : [ "Hoy! Nahilo ko sa pag-uyog nimo! 😵", "Hinay-hinay, uy! Ayaw ko'g uyog-uyoga!", "Nahilo ko! Ibaba mo ako nang dahan-dahan, ha." ]),
+      mood:'angry' };
+  }
+
   global.FinPetDialogue = {
     buildContext,
     getModuleMessage,
@@ -1615,7 +2066,12 @@
     getExpenseSpikeMessage,
     getGoalProgressMessage,
     getLoanPaymentMessage,
-    getReaction
+    getReaction,
+    getAnnoyedMessage,
+    getSulkMessage,
+    getApologyMessage,
+    getCooldownMessage,
+    getShakenMessage
   };
 
 })(window);
