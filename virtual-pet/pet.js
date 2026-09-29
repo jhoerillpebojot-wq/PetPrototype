@@ -266,7 +266,7 @@
       d:'#2e1c02', m:'#8a2a18', p:'#ff8a7a', k:'#ff7f6e', // ink / mouth inside / tongue / cheek
       t:'#7cc4ff', u:'#3b8ad6',                      // tear
       x:'#0b1229', n:'#3a4d8c', N:'#6a83c9', z:'#1b2650', B:'#2a3a70', // cap
-      y:'#ffd84a', r:'#c98a12'                       // gold trim / tassel
+      y:'#ffd84a', r:'#c98a12', R:'#e8433a'                       // gold trim / tassel
     };
 
     function layer(){ return {}; }
@@ -376,7 +376,12 @@
       part('mouth-o',    function(L){ art(L,14,24,['.dd.','dmmd','dmmd','.dd.']); }) +
       part('mouth-z',    function(L){ art(L,15,25,['dd']); }) +
       part('mouth-think',function(L){ art(L,14,24,['...d','ddd.']); }) +
-      part('tear',       function(L){ art(L,10,22,['t','u']); });
+      part('tear',       function(L){ art(L,10,22,['t','u']); }) +
+      part('eyes-angry', function(L){ var e=['dd','dd']; art(L,11,20,e); art(L,19,20,e); }) +
+      part('brows-angry',function(L){ art(L,10,16,['dd..','..dd']); art(L,18,16,['..dd','dd..']); }) +
+      part('mouth-grit', function(L){ art(L,13,25,['dddddd','dwwwwd','dddddd']); }) +
+      part('angry-flush',function(L){ art(L,9,22,['RR','RR']); art(L,21,22,['RR','RR']); }) +
+      part('anger-vein', function(L){ art(L,23,14,['R.R','.R.','R.R']); });
 
     var cheeks = svgOf(art(art(layer(), 9, 23, ['kk']), 21, 23, ['kk']));
 
@@ -410,7 +415,9 @@
     surprised: { ms:950 },
     thinking:  { loop:true },
     walking:   { loop:true },
-    wave:      { ms:1300 }
+    wave:      { ms:1300 },
+    angry:     { loop:true },
+    sulk:      { loop:true }
   };
   // Fin only ever had these six moods; map each onto the closest
   // expression rather than inventing new trigger points.
@@ -422,7 +429,9 @@
     concerned: 'sad',
     sleeping:  'sleepy',
     surprised: 'surprised',
-    waving:    'wave'
+    waving:    'wave',
+    angry:     'angry',
+    sulking:   'sulk'
   };
   var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -495,6 +504,7 @@
   /* ---------- mood / expression ---------- */
   var MOOD_DEFER_RETRY_MS = 70;
   function setMood(mood, autoRevertMs){
+    if(isSulking() && mood!=='angry' && mood!=='sleeping') mood = 'sulking';
     // If a blink is mid-flash, applying the new mood right now would swap
     // SpriteFX's current animation out from under it - the blink cuts off
     // after a frame or two and jumps straight into the new mood's frames,
@@ -569,6 +579,7 @@
   function showBubble(msg){
     if(!msg) return;
     if(pet.tour) return; // the guided tour owns Fin's voice while it runs
+    if(isSulking() && !msg.sulk) return; // giving the silent treatment
     clearTimeout(pet.bubbleHideTimer);
     if(els.root.classList.contains('fin-minimized')){
       // Still register that something happened; don't force it open on
@@ -597,7 +608,7 @@
     // brief talking flourish, then settle into the message's mood (or idle)
     var settleMood = msg.mood || 'idle';
     setMood('talking');
-    setTimeout(function(){ setMood(settleMood); }, 420);
+    setTimeout(function(){ setMood(settleMood, settleMood==='angry' ? ANGRY_MS : 0); }, 420);
 
     var hideAfter = msg.stayMs || (actionList.length ? CFG.BUBBLE_MS_ACTION : CFG.BUBBLE_MS);
     pet.bubbleHideTimer = setTimeout(hideBubble, hideAfter);
@@ -634,7 +645,7 @@
     pet.queueBusy = true;
     setTimeout(function(){
       showBubble(next.msg);
-      if(els.root.classList.contains('fin-minimized') || pet.tour){
+      if(els.root.classList.contains('fin-minimized') || pet.tour || (isSulking() && !next.msg.sulk)){
         // showBubble no-op'd (minimized / touring) — nothing will ever call hideBubble
         // for it, so release the queue ourselves instead of stalling on it.
         releaseQueue();
@@ -753,17 +764,18 @@
         showBubble(dlg.getPrivacyMessage());
         break;
       case 'ask-menu':
-        showBubble(dlg.getAskMenuMessage());
+        showBubble(dlg.getAskMenuMessage(enrichedCtx(), getSettings().tone, action.page||0));
         break;
       case 'ask':
-        setMood('thinking');
-        setTimeout(function(){ showBubble(dlg.answerQuestion(action.query||'', enrichedCtx())); }, 260);
+        askAndShow(action.query||'');
         break;
       case 'ask-custom':
-        showInlineInput("What do you want to know?", "e.g. how much on food this month", function(val){
-          setMood('thinking');
-          setTimeout(function(){ showBubble(dlg.answerQuestion(val, enrichedCtx())); }, 260);
+        showInlineInput("What do you want to know?", "e.g. magkano gastos ko sa kaon karon?", function(val){
+          askAndShow(val);
         });
+        break;
+      case 'apologize':
+        endSulk(true);
         break;
       case 'goal-quick-add':
         if(typeof window.addToGoal==='function' && action.goalId!==undefined && action.amount){
@@ -827,14 +839,102 @@
     }, delay);
   }
 
+  /* ---------- annoyance: irritated -> angry -> sulking ----------
+     Taps that come faster than ANNOY_WINDOW_MS apart stack up. Crossing a
+     threshold makes Fin react (stage 0 irritated, 1 angry, 2 furious and
+     sulking). While sulking Fin ignores everything except grumbles until
+     the person taps "Sorry" or SULK_MS passes. Shaking Fin while dragging
+     and rude questions feed the same meter. Nothing here is saved: a page
+     reload gives Fin a clean slate. */
+  var ANNOY_WINDOW_MS = 2400;
+  var ANNOY_STAGES = [5, 8, 11];
+  var SULK_MS = 45000;
+  var ANGRY_MS = 4500;
+  var ANNOY = { count:0, lastAt:0, level:0, sulkUntil:0, sulkTimer:null };
+
+  function isSulking(){ return Date.now() < ANNOY.sulkUntil; }
+
+  // Returns the stage index just reached (0-2), or -1 if none.
+  function registerAnnoy(weight){
+    var now = Date.now();
+    if(now-ANNOY.lastAt > ANNOY_WINDOW_MS){ ANNOY.count = 0; ANNOY.level = 0; }
+    ANNOY.lastAt = now;
+    ANNOY.count += (weight||1);
+    var crossed = -1;
+    while(ANNOY.level < ANNOY_STAGES.length && ANNOY.count >= ANNOY_STAGES[ANNOY.level]){ crossed = ANNOY.level; ANNOY.level++; }
+    return crossed;
+  }
+
+  function startSulk(){
+    ANNOY.sulkUntil = Date.now() + SULK_MS;
+    clearTimeout(ANNOY.sulkTimer);
+    ANNOY.sulkTimer = setTimeout(function(){ endSulk(false); }, SULK_MS);
+    els.root.classList.add('fin-furious');
+    setTimeout(function(){ if(els.root) els.root.classList.remove('fin-furious'); }, 3200);
+  }
+
+  function endSulk(apologized){
+    var wasSulking = isSulking();
+    clearTimeout(ANNOY.sulkTimer);
+    ANNOY.sulkUntil = 0; ANNOY.count = 0; ANNOY.level = 0;
+    els.root.classList.remove('fin-furious');
+    var dlg = window.FinPetDialogue, tone = getSettings().tone;
+    setMood('idle');
+    if(apologized) showBubble(dlg.getApologyMessage(tone));
+    else if(wasSulking) showBubble(dlg.getCooldownMessage(tone));
+    resetIdle();
+  }
+
+  function triggerAnnoyance(stage){
+    var dlg = window.FinPetDialogue, tone = getSettings().tone;
+    var msg = dlg.getAnnoyedMessage(stage, tone);
+    if(stage>=2){
+      startSulk();
+      msg.sulk = true;
+      msg.actions = [ { label:'Sorry na 🙏', kind:'apologize' }, { label:'Ignore', kind:'dismiss' } ];
+    } else if(stage===1){
+      msg.actions = [ { label:'Sorry 🙏', kind:'apologize' } ];
+    }
+    showBubble(msg);
+  }
+
+  function onShaken(){
+    var stage = registerAnnoy(3);
+    if(stage>=1){ triggerAnnoyance(stage); return; }
+    showBubble(window.FinPetDialogue.getShakenMessage(getSettings().tone));
+  }
+
+  function askAndShow(q){
+    var dlg = window.FinPetDialogue;
+    setMood('thinking');
+    setTimeout(function(){
+      var res = dlg.answerQuestion(q||'', enrichedCtx(), getSettings().tone);
+      if(res && res.annoy){
+        var stage = registerAnnoy(3);
+        if(stage>=2){ triggerAnnoyance(2); return; }
+      }
+      showBubble(res);
+    }, 260);
+  }
+
   /* ---------- interaction ---------- */
   function onAvatarClick(){
     if(pet.suppressClick){ pet.suppressClick = false; return; }
     resetIdle();
     if(pet.sleeping){ wake(); return; }
+    var dlg = window.FinPetDialogue, tone = getSettings().tone;
+    var stage = registerAnnoy(1);
+    if(isSulking()){
+      // silent treatment: taps only get grumbles (and a way to say sorry)
+      if(els.bubble.classList.contains('fin-show')){ hideBubble(); return; }
+      var sm = dlg.getSulkMessage(tone); sm.sulk = true;
+      showBubble(sm);
+      return;
+    }
+    if(stage>=0){ triggerAnnoyance(stage); return; }
     // Tap the pet again while a bubble is open to close it (tap = open/close toggle).
     if(els.bubble.classList.contains('fin-show')){ hideBubble(); return; }
-    showBubble(window.FinPetDialogue.getMenuMessage(safeCtx(), getSettings().tone));
+    showBubble(dlg.getMenuMessage(safeCtx(), tone));
   }
 
   function minimize(on){
@@ -882,6 +982,7 @@
       var r = els.root.getBoundingClientRect();
       drag.startLeft = r.left; drag.startTop = r.top;
       drag.startX = e.clientX; drag.startY = e.clientY;
+      drag.lastX = e.clientX; drag.lastDir = 0; drag.reversals = 0; drag.shakeStart = Date.now(); drag.shaken = false;
       try{ els.avatarWrap.setPointerCapture(e.pointerId); }catch(err){}
     });
     els.avatarWrap.addEventListener('pointermove', function(e){
@@ -894,6 +995,18 @@
       if(drag.moved){
         e.preventDefault();
         clampAndApplyPosition(drag.startLeft+dx, drag.startTop+dy);
+        // rapid left-right reversals = the pet is being shaken
+        var step = e.clientX - drag.lastX;
+        if(Math.abs(step) >= 6){
+          drag.lastX = e.clientX;
+          var dir = step>0 ? 1 : -1;
+          if(drag.lastDir && dir!==drag.lastDir){
+            if(Date.now()-drag.shakeStart > 1800){ drag.shakeStart = Date.now(); drag.reversals = 0; }
+            drag.reversals++;
+            if(drag.reversals>=6 && !drag.shaken){ drag.shaken = true; onShaken(); }
+          }
+          drag.lastDir = dir;
+        }
       }
     });
     function endDrag(e){
@@ -1680,6 +1793,7 @@
 
   function wake(){
     pet.sleeping = false;
+    setMood('idle');
     var line = window.FinPetDialogue.getWakeLine(getSettings().tone);
     showBubble(line);
     resetIdle();
@@ -1917,7 +2031,7 @@
 
   function react(kind, data){
     try{
-      if(!els.root || els.root.classList.contains('fin-minimized') || pet.tour) return;
+      if(!els.root || els.root.classList.contains('fin-minimized') || pet.tour || isSulking()) return;
       var dlg = window.FinPetDialogue;
       if(!dlg || typeof dlg.getReaction!=='function') return;
       var s = getSettings();
@@ -2098,6 +2212,7 @@
       return true;
     },
     setMood: function(mood, autoRevertMs){ setMood(mood, autoRevertMs); },
+    annoy: function(stage){ triggerAnnoyance(stage===undefined ? 1 : stage); }, // e.g. FinPet.annoy(2) to preview the sulk
     setTourMode: function(on){
       pet.tour = !!on;
       if(on){ pet.bubbleQueue = []; clearTimeout(pet.reactTimer); hideBubble(); }
