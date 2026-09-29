@@ -1051,6 +1051,20 @@ body.light .auth-bg::after{display:none}
 .set-panel{display:none}
 .set-panel.open{display:block}
 .set-panel.single .card-hd{display:none !important}
+
+/* ── Automation checkboxes → compact toggles (global input{width:100%} was stretching them) ── */
+.fa-row input[type=checkbox]{-webkit-appearance:none !important;appearance:none !important;width:40px !important;min-width:40px !important;max-width:40px !important;height:22px !important;padding:0 !important;margin:0;flex:0 0 auto;position:relative;border-radius:999px !important;background:var(--surface3) !important;border:1px solid var(--border2) !important;box-shadow:none !important;cursor:pointer;transition:background var(--tr),border-color var(--tr)}
+.fa-row input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:transform var(--tr),background var(--tr)}
+.fa-row input[type=checkbox]:checked{background:var(--accent-bg) !important;border-color:var(--accent) !important}
+.fa-row input[type=checkbox]:checked::after{transform:translateX(18px);background:var(--accent)}
+.fa-row label{display:flex;align-items:center;gap:8px;flex-shrink:0;font-size:12px;color:var(--muted);cursor:pointer}
+label.fa-row{cursor:pointer}
+.fa-row .fa-n{min-width:120px}
+
+/* ── In-page description suggestions (replaces the native datalist popup) ── */
+.fa-suggest{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:60;background:var(--surface);border:1px solid var(--border2);border-radius:12px;box-shadow:var(--shadow-lg);max-height:220px;overflow-y:auto;padding:4px}
+.fa-sg{padding:10px 12px;border-radius:8px;font-size:13.5px;color:var(--text);cursor:pointer}
+.fa-sg:hover,.fa-sg.on{background:var(--accent-bg);color:var(--accent)}
 </style>
 <!-- Firebase (Cloud Sync) — compat SDK, no build step needed -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
@@ -5782,10 +5796,44 @@ function parseQuick(raw){
   if(hist){if(!cat)cat=hist.cat;if(!amount)amount=hist.amount;if(!wallet)wallet=hist.source;}
   return {desc:d,amount,cat,wallet,date};}
 
+/* ── Custom autocomplete for the Description field (the native datalist popup renders outside the page in some browsers) ── */
+function descSuggest(d){
+  const par=d.parentNode;par.style.position='relative';
+  const box=document.createElement('div');box.className='fa-suggest';box.style.display='none';par.appendChild(box);
+  let idx=-1;
+  const hide=()=>{box.style.display='none';idx=-1;};
+  const paint=()=>{[...box.children].forEach((el,i)=>el.classList.toggle('on',i===idx));};
+  const pick=t=>{d.value=t;d.dispatchEvent(new Event('input',{bubbles:true}));hide();};
+  const build=()=>{
+    const v=d.value.trim().toLowerCase(),seen=new Set(),out=[];
+    for(let i=state.expenses.length-1;i>=0&&out.length<6;i--){
+      const t=(state.expenses[i].desc||'').trim(),k=t.toLowerCase();
+      if(!t||/→/.test(t)||seen.has(k)||k===v)continue;
+      if(v&&!k.includes(v))continue;
+      seen.add(k);out.push(t);
+    }
+    idx=-1;
+    box.innerHTML=out.map(t=>'<div class="fa-sg">'+esc(t)+'</div>').join('');
+    box.style.display=out.length?'block':'none';
+  };
+  box.addEventListener('pointerdown',e=>{const el=e.target.closest('.fa-sg');if(el){e.preventDefault();pick(el.textContent);}});
+  d.addEventListener('focus',build);
+  d.addEventListener('input',build);
+  d.addEventListener('blur',()=>setTimeout(hide,120));
+  d.addEventListener('keydown',e=>{
+    const n=box.children.length;
+    if(e.key==='Escape'){hide();return;}
+    if(!n||box.style.display==='none')return;
+    if(e.key==='ArrowDown'){e.preventDefault();idx=(idx+1)%n;paint();}
+    else if(e.key==='ArrowUp'){e.preventDefault();idx=(idx-1+n)%n;paint();}
+    else if(e.key==='Enter'&&idx>=0){e.preventDefault();pick(box.children[idx].textContent);}
+  });
+}
+
 /* ── Autofill from history + auto-category on the main Add Expense form ── */
 let catTouched=false,srcTouched=false;
 function wireForm(){const d=document.getElementById('exp-desc'),c=document.getElementById('exp-cat'),s=document.getElementById('exp-source'),am=document.getElementById('exp-amount');
-  if(!d||d._fa)return;d._fa=1;d.setAttribute('list','fa-descs');
+  if(!d||d._fa)return;d._fa=1;descSuggest(d);
   c.addEventListener('change',()=>{catTouched=true;});s.addEventListener('change',()=>{srcTouched=true;});
   window.addEventListener('fin:expense-logged',()=>{catTouched=srcTouched=false;});
   d.addEventListener('input',()=>{const v=d.value.trim().toLowerCase();if(!v){catTouched=srcTouched=false;return;}
